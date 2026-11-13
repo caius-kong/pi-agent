@@ -1,0 +1,82 @@
+{
+  "lastChangelogVersion": "1.5.2",
+  "theme": "dark",
+  "defaultProvider": "trendmicro",
+  "defaultModel": "deepseek-v4.1-flash",
+  "defaultThinkingLevel": "high",
+  "modelThinkingLevels": {
+    "trendmicro/gpt-6.1-sol": "medium"
+  },
+  "packages": [
+    "npm:pi-subagents",
+    "npm:@arvoretech/pi-slack-bridge",
+    "npm:pi-web-access",
+    "npm:@narumitw/pi-btw",
+    "https://github.com/cathrynlavery/diagram-design",
+    "npm:pi-cc-extensions",
+    "npm:@dietrichgebert/ponytail@5.1.0"
+  ],
+  "sessionBudget": {
+    "maxCostUsd": 10,
+    "mode": "enforce"
+  },
+  "permission-gate": {
+    "yolo": true
+  },
+  "subagents": {
+    "agentScanDirs": [
+      "/Users/caius_kong/.pi/agent/skills/planner-executor-pipeline/agents"
+    ],
+    "defaultModel": "trendmicro/deepseek-v4.1-flash",
+    "defaultThinking": "high",
+    "artifactDir": "temp",
+    "timeoutMs": 2700000,
+    "agentOverrides": {
+      "oracle": {
+        "model": "trendmicro/gpt-6.1-sol",
+        "thinking": "high"
+      },
+      "worker": {
+        "model": "trendmicro/deepseek-v4.1-flash",
+        "thinking": "max"
+      },
+      "reviewer": {
+        "model": "trendmicro/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "scout": {
+        "model": "trendmicro/deepseek-v4.1-flash",
+        "thinking": "low"
+      },
+      "researcher": {
+        "model": "trendmicro/deepseek-v4.1-flash",
+        "thinking": "high"
+      },
+      "plan": {
+        "model": "trendmicro/gpt-6.1-sol",
+        "thinking": "medium"
+      }
+    }
+  },
+  "tuiMode": "regular",
+  "showCacheMissNotices": true,
+  "enableInstallTelemetry": false,
+  "extensions": [
+    "/Users/caius_kong/.hindsight/coding-agents/dist/pi.js"
+  ],
+  "auto-agent-loop": {
+    "enable": true,
+    "flash-model": "trendmicro/deepseek-v4.1-flash",
+    "jev-model": "trendmicro/jev-1.13",
+    "max-loop": 3,
+    "timeout-ms": 600000
+  },
+  "extensionChangelogVersions": {
+    "{\"source\":\"npm:pi-subagents\",\"scope\":\"user\"}": "0.88.0",
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0",
+    "{\"source\":\"npm:@narumitw/pi-btw\",\"scope\":\"user\"}": "0.63.8",
+    "{\"source\":\"npm:pi-atelier\",\"scope\":\"user\"}": "0.18.0"
+  },
+  "fullscreenExitOutput": "transcript",
+  "fullscreenScrollbar": "auto"
+}

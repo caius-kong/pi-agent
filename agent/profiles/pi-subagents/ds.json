@@ -1,0 +1,29 @@
+{
+  "subagents": {
+    "defaultModel": "deepseek/deepseek-flash",
+    "defaultThinking": "max",
+    "artifactDir": "temp",
+    "agentOverrides": {
+      "oracle": {
+        "model": "deepseek/deepseek-v4-pro",
+        "thinking": "high"
+      },
+      "worker": {
+        "model": "deepseek/deepseek-flash",
+        "thinking": "max"
+      },
+      "reviewer": {
+        "model": "deepseek/deepseek-flash",
+        "thinking": "max"
+      },
+      "scout": {
+        "model": "deepseek/deepseek-flash",
+        "thinking": "low"
+      },
+      "researcher": {
+        "model": "deepseek/deepseek-flash",
+        "thinking": "low"
+      }
+    }
+  }
+}

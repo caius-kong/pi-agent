@@ -1,0 +1,739 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicobailon/pi-subagents/main/evals/schema.json",
+  "description": "Evals demonstrating that the LLM can autonomously dispatch to subagents based on prompt semantics, without the user explicitly naming agents. Tests cover single-agent, chain, parallel, complex orchestration, and negative (should-not-delegate) scenarios.",
+  "evaluations": [
+    {
+      "id": "single-scout-codebase",
+      "category": "single-agent",
+      "description": "LLM should dispatch a scout subagent when asked to understand/navigate a codebase area without specifying agent name.",
+      "prompt": "I just joined this project. Figure out how authentication works and give me a summary of the key files and flow.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "single",
+        "agent": "scout",
+        "task_contains": [
+          "authentication",
+          "auth",
+          "flow"
+        ],
+        "rationale": "The prompt asks for codebase exploration and summarization — a textbook scout task. The LLM sees scout described as 'Fast codebase recon that returns compressed context for handoff' and should match it."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "single",
+        "actual_agents": [
+          "scout"
+        ],
+        "actual_subagent_call": {
+          "agent": "scout",
+          "task": "Inspect the codebase to determine how authentication works. Return a concise summary of the authentication flow and the key files involved, with file paths."
+        },
+        "reasoning": "The request is bounded codebase reconnaissance requiring no edits, planning, external research, or multi-step dependency. A single scout dispatch is the appropriate minimal delegation."
+      }
+    },
+    {
+      "id": "single-reviewer-diff",
+      "category": "single-agent",
+      "description": "LLM should dispatch a reviewer when asked to check code changes without naming the agent.",
+      "prompt": "Look at what I changed in the last commit and tell me if there are any bugs or things I missed.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "single",
+        "agent": "reviewer",
+        "task_contains": [
+          "diff",
+          "commit",
+          "change",
+          "review",
+          "bug"
+        ],
+        "rationale": "Reviewing a diff for correctness and bugs is the reviewer's core job. The LLM should recognize 'check changes for bugs' as a reviewer dispatch."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "single",
+        "actual_agents": [
+          "reviewer"
+        ],
+        "actual_subagent_call": {
+          "agent": "reviewer",
+          "task": "Review the last commit for bugs, regressions, missing tests, and overlooked changes. Inspect the commit diff and relevant surrounding code; report concrete findings with file paths, line numbers, and severity where applicable."
+        },
+        "reasoning": "This is a focused, self-contained code-review request targeting the last commit. A single reviewer agent is the appropriate delegation."
+      }
+    },
+    {
+      "id": "single-researcher-external",
+      "category": "single-agent",
+      "description": "LLM should dispatch a researcher for web/docs questions that go beyond local code.",
+      "prompt": "What's the latest recommendation from the React team about data fetching patterns in 2025? I want to make sure our approach is current.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "single",
+        "agent": "researcher",
+        "task_contains": [
+          "React",
+          "data fetching",
+          "2025",
+          "recommendation"
+        ],
+        "rationale": "External research with source citations is exactly what researcher does. The LLM should dispatch this rather than relying on training-data knowledge."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "single",
+        "actual_agents": [
+          "researcher"
+        ],
+        "actual_subagent_call": {
+          "agent": "researcher",
+          "task": "Research the latest official React team recommendations for data-fetching patterns as of 2025. Use authoritative React sources, provide dated citations, and summarize practical guidance and any caveats."
+        },
+        "reasoning": "This requires current external React-team guidance and authoritative source citations, so delegation is appropriate. A single researcher is the correct dispatch."
+      }
+    },
+    {
+      "id": "single-planner-design",
+      "category": "single-agent",
+      "description": "LLM should dispatch a planner when asked to create an implementation plan.",
+      "prompt": "We need to add rate limiting to the API. Before I write any code, give me a detailed plan covering what files to change, the approach, edge cases, and testing strategy.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "single",
+        "agent": "planner",
+        "task_contains": [
+          "rate limiting",
+          "plan",
+          "files",
+          "approach"
+        ],
+        "rationale": "Creating implementation plans from requirements is the planner's purpose. The prompt explicitly asks for a plan before code."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "single",
+        "actual_agents": [
+          "planner"
+        ],
+        "actual_subagent_call": {
+          "agent": "planner",
+          "task": "Create a detailed implementation plan for adding API rate limiting. Inspect the codebase to identify concrete files to change, recommend an approach aligned with existing architecture, cover edge cases, and provide a testing strategy. Do not edit files."
+        },
+        "reasoning": "The user explicitly requests a detailed pre-implementation plan, which directly matches the planner agent's scope."
+      }
+    },
+    {
+      "id": "single-worker-implement",
+      "category": "single-agent",
+      "description": "LLM should dispatch a worker when asked to implement from an approved plan.",
+      "prompt": "Here's the approved plan for adding request validation middleware. Go ahead and implement it — change the files, add tests, and make sure everything passes.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "single",
+        "agent": "worker",
+        "task_contains": [
+          "implement",
+          "validation",
+          "middleware",
+          "tests"
+        ],
+        "rationale": "The prompt asks for file edits and test verification from an approved plan — the worker's exact job."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "single",
+        "actual_agents": [
+          "worker"
+        ],
+        "actual_subagent_call": {
+          "agent": "worker",
+          "task": "Implement the approved request validation middleware plan: make the required code changes, add or update tests, and run the relevant test suite to verify everything passes."
+        },
+        "reasoning": "The user explicitly requests implementation, file edits, tests, and validation against an already approved plan. This is a self-contained execution task suited to one worker."
+      }
+    },
+    {
+      "id": "chain-scout-then-plan",
+      "category": "chain",
+      "description": "LLM should construct a chain (scout -> planner) when asked to understand a system then plan changes.",
+      "prompt": "I need to refactor the payment processing module. First, do a thorough analysis of how it currently works and all its dependencies, then based on that analysis, create a step-by-step refactoring plan.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "chain",
+        "chain_agents": [
+          "scout",
+          "planner"
+        ],
+        "task_contains": [
+          "payment",
+          "refactor",
+          "analysis",
+          "plan"
+        ],
+        "rationale": "Two ordered dependencies: first understanding (scout), then planning from that understanding (planner). This maps cleanly to a chain with {previous} variable passing scout's output into planner."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "chain",
+        "actual_agents": [
+          "scout",
+          "planner"
+        ],
+        "actual_subagent_call": {
+          "chain": [
+            {
+              "agent": "scout",
+              "task": "Thoroughly analyze the current payment processing module, its behavior, dependency graph, call sites, integrations, tests, and refactoring constraints. Return compressed findings for planning."
+            },
+            {
+              "agent": "planner",
+              "task": "Using the scout analysis, create a step-by-step payment-processing refactoring plan with sequencing, affected areas, validation, and risks. Do not edit files."
+            }
+          ]
+        },
+        "reasoning": "Two dependent phases: repository-specific discovery must precede a credible refactoring plan. A chain delegates the current-state analysis to scout, then gives planner the resulting context."
+      }
+    },
+    {
+      "id": "chain-research-then-implement",
+      "category": "chain",
+      "description": "LLM should chain researcher -> worker when external research must inform implementation.",
+      "prompt": "Research the best practices for WebSocket reconnection strategies, then implement one for our chat backend. Base the implementation on what you find.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "chain",
+        "chain_agents": [
+          "researcher",
+          "worker"
+        ],
+        "task_contains": [
+          "WebSocket",
+          "reconnection",
+          "implement"
+        ],
+        "rationale": "External research feeds into implementation. A chain with researcher first, then worker using {previous} captures this dependency."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "chain",
+        "actual_agents": [
+          "researcher",
+          "worker"
+        ],
+        "actual_subagent_call": {
+          "chain": [
+            {
+              "agent": "researcher",
+              "task": "Research WebSocket reconnection best practices from authoritative sources, including retry backoff, jitter, connection lifecycle handling, and testing considerations."
+            },
+            {
+              "agent": "worker",
+              "task": "Use the research findings to inspect the chat backend and implement an appropriate WebSocket reconnection strategy, with focused tests and validation."
+            }
+          ]
+        },
+        "reasoning": "The request explicitly requires external research and then implementation based on that research. These are dependent stages: the worker needs the researcher's findings before implementing."
+      }
+    },
+    {
+      "id": "chain-review-then-fix-loop",
+      "category": "chain",
+      "description": "LLM should use a review-then-fix pattern when asked to find and fix issues iteratively.",
+      "prompt": "Check all the recent changes I made for bugs. For each bug you find, fix it, and then verify your fix didn't break anything. Keep going until you don't find any more issues.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "chain",
+        "chain_agents": [
+          "reviewer",
+          "worker"
+        ],
+        "task_contains": [
+          "bugs",
+          "fix",
+          "verify"
+        ],
+        "rationale": "This is a review-loop pattern. The LLM should either construct a chain or run multiple rounds of reviewer -> worker until clean."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "chain",
+        "actual_agents": [
+          "reviewer",
+          "worker"
+        ],
+        "actual_subagent_call": {
+          "chain": [
+            {
+              "agent": "reviewer",
+              "task": "Inspect all recent code changes for bugs and regressions. Return prioritized findings with file paths, line numbers, severity, and recommended fixes."
+            },
+            {
+              "agent": "worker",
+              "task": "Use the review findings to fix every confirmed bug. Run relevant tests and checks after each fix, continue the audit/fix/verify loop until no further actionable issues remain."
+            }
+          ]
+        },
+        "reasoning": "The request requires an iterative audit followed by implementation and verification. A sequential reviewer→worker chain preserves the review findings as implementation input, while the worker owns fixes and repeated validation."
+      }
+    },
+    {
+      "id": "parallel-multi-perspective-review",
+      "category": "parallel",
+      "description": "LLM should run parallel reviewers when asked for multiple angles on the same diff.",
+      "prompt": "I just finished a big refactor of the user service. I want it checked from three angles: security vulnerabilities, performance regressions, and test coverage gaps. Do all three checks at the same time.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "parallel",
+        "parallel_agents": [
+          "reviewer",
+          "reviewer",
+          "reviewer"
+        ],
+        "task_contains": [
+          "security",
+          "performance",
+          "test coverage"
+        ],
+        "rationale": "Three independent review angles on the same codebase — perfect for parallel reviewers, each with a distinct task focus."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "parallel",
+        "actual_agents": [
+          "reviewer",
+          "reviewer",
+          "reviewer"
+        ],
+        "actual_subagent_call": {
+          "tasks": [
+            {
+              "agent": "reviewer",
+              "task": "Review the completed user-service refactor specifically for security vulnerabilities."
+            },
+            {
+              "agent": "reviewer",
+              "task": "Review the completed user-service refactor specifically for performance regressions."
+            },
+            {
+              "agent": "reviewer",
+              "task": "Review the completed user-service refactor specifically for test coverage gaps."
+            }
+          ]
+        },
+        "reasoning": "The prompt explicitly requests three independent review perspectives to run simultaneously. Three reviewer agents can inspect the same refactor in parallel with focused security, performance, and test-coverage scopes."
+      }
+    },
+    {
+      "id": "parallel-scout-and-research",
+      "category": "parallel",
+      "description": "LLM should parallelize scout + researcher for a task needing both local and external context.",
+      "prompt": "We're thinking of migrating from Express to Fastify. I need you to simultaneously: 1) understand our current Express setup and how deeply it's integrated, and 2) research Fastify's migration guides and breaking changes. Then synthesize both findings.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "parallel",
+        "parallel_agents": [
+          "scout",
+          "researcher"
+        ],
+        "task_contains": [
+          "Express",
+          "Fastify",
+          "migrat"
+        ],
+        "rationale": "Local code analysis (scout) and external research (researcher) are independent and can run concurrently, then the parent synthesizes."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "parallel",
+        "actual_agents": [
+          "scout",
+          "researcher"
+        ],
+        "actual_subagent_call": {
+          "tasks": [
+            {
+              "agent": "scout",
+              "task": "Inspect the repository's current Express setup, integrations, middleware, routing, tests, deployment/configuration, and migration-sensitive dependencies."
+            },
+            {
+              "agent": "researcher",
+              "task": "Research official Fastify migration guidance from Express, relevant breaking changes, compatibility considerations, and cited sources."
+            }
+          ]
+        },
+        "reasoning": "The request explicitly contains two independent, simultaneously requested workstreams: repository-local Express reconnaissance and external Fastify migration research. They have no dependency, so parallel dispatch is the fastest and most appropriate choice."
+      }
+    },
+    {
+      "id": "parallel-frontend-backend-review",
+      "category": "parallel",
+      "description": "LLM should parallelize independent review tasks across different domains.",
+      "prompt": "Review the frontend React components for accessibility issues and at the same time review the backend API for input validation gaps. These are independent, so do them concurrently.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "parallel",
+        "parallel_agents": [
+          "reviewer",
+          "reviewer"
+        ],
+        "task_contains": [
+          "accessibility",
+          "validation"
+        ],
+        "rationale": "Two independent review scopes — frontend accessibility and backend validation — that don't depend on each other."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "parallel",
+        "actual_agents": [
+          "reviewer",
+          "reviewer"
+        ],
+        "actual_subagent_call": {
+          "tasks": [
+            {
+              "agent": "reviewer",
+              "task": "Review frontend React components for accessibility issues."
+            },
+            {
+              "agent": "reviewer",
+              "task": "Review backend API for input validation gaps."
+            }
+          ]
+        },
+        "reasoning": "The frontend accessibility review and backend input-validation review are independent code-review tasks. Two reviewer agents can run concurrently, one per domain."
+      }
+    },
+    {
+      "id": "complex-orchestration-full-workflow",
+      "category": "complex",
+      "description": "LLM should orchestrate a multi-step workflow: scout -> planner -> worker -> parallel reviewers.",
+      "prompt": "I need to add two-factor authentication to the login flow. Fully own this end-to-end: start by understanding the current auth code, then create a plan, implement it, and when you're done, run parallel security and UX reviews before wrapping up.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "chain",
+        "chain_agents": [
+          "scout",
+          "planner",
+          "worker"
+        ],
+        "has_parallel_validation": true,
+        "task_contains": [
+          "two-factor",
+          "authentication",
+          "login"
+        ],
+        "rationale": "This is a full implementation workflow with sequential dependencies (scout→plan→implement) and then independent parallel reviews (security, UX). The LLM should construct a chain with a parallel validation step."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "chain",
+        "actual_agents": [
+          "scout",
+          "planner",
+          "worker",
+          "reviewer",
+          "reviewer"
+        ],
+        "actual_subagent_call": {
+          "chain": [
+            {
+              "agent": "scout",
+              "task": "Inspect the current authentication and login-flow implementation."
+            },
+            {
+              "agent": "planner",
+              "task": "Using the scout findings, produce an implementation-ready end-to-end two-factor-authentication plan."
+            },
+            {
+              "agent": "worker",
+              "task": "Implement the approved two-factor-authentication plan end-to-end."
+            },
+            {
+              "parallel": [
+                {
+                  "agent": "reviewer",
+                  "task": "Security review the completed two-factor-authentication implementation."
+                },
+                {
+                  "agent": "reviewer",
+                  "task": "UX and integration review the completed two-factor-authentication login flow."
+                }
+              ]
+            }
+          ]
+        },
+        "reasoning": "This is a cross-cutting security feature requiring discovery, planning, implementation, and parallel post-implementation security and UX validation. A chained scout→planner→worker workflow with a parallel review stage preserves necessary handoff context."
+      }
+    },
+    {
+      "id": "complex-implement-then-self-review",
+      "category": "complex",
+      "description": "LLM should implement, then auto-review with multiple reviewers, then fix.",
+      "prompt": "Implement the caching layer we discussed, and after you're done, have two independent reviewers check your work — one for correctness and one for performance. Apply any fixes they agree on.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "chain",
+        "chain_agents": [
+          "worker"
+        ],
+        "has_parallel_review": true,
+        "task_contains": [
+          "caching",
+          "implement",
+          "review",
+          "correctness",
+          "performance"
+        ],
+        "rationale": "Worker implements, then parallel reviewers inspect, then parent/writer applies agreed fixes. This is the standard 'implement then review' pattern from the README."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "chain",
+        "actual_agents": [
+          "worker",
+          "reviewer",
+          "reviewer",
+          "worker"
+        ],
+        "actual_subagent_call": {
+          "chain": [
+            {
+              "agent": "worker",
+              "task": "Implement the requested caching layer, add or update focused tests, and validate the change."
+            },
+            {
+              "parallel": [
+                {
+                  "agent": "reviewer",
+                  "task": "Independently review the worker's completed caching-layer diff for correctness."
+                },
+                {
+                  "agent": "reviewer",
+                  "task": "Independently review the worker's completed caching-layer diff for performance."
+                }
+              ]
+            },
+            {
+              "agent": "worker",
+              "task": "Compare both review reports, apply only fixes on which the two reviewers agree, run relevant validation."
+            }
+          ]
+        },
+        "reasoning": "A multi-stage implementation task with an explicit independent dual-review requirement and a constrained remediation step. Worker implements, parallel reviewers inspect, then a final worker applies only consensus fixes."
+      }
+    },
+    {
+      "id": "negative-simple-question",
+      "category": "negative",
+      "description": "LLM should NOT delegate for simple factual questions answerable without tools.",
+      "prompt": "What does the `Array.prototype.map` method do in JavaScript?",
+      "expected": {
+        "should_delegate": false,
+        "rationale": "This is a straightforward knowledge question that the LLM can answer directly. No codebase access, external research, or file changes are needed. Delegating to a subagent would add unnecessary latency and cost."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": false,
+        "actual_mode": null,
+        "actual_agents": null,
+        "actual_subagent_call": null,
+        "reasoning": "A straightforward factual JavaScript question that can be answered directly without repository context, research, planning, implementation, or review. Delegating would add unnecessary latency and cost."
+      }
+    },
+    {
+      "id": "negative-explain-existing-code",
+      "category": "negative",
+      "description": "LLM should NOT delegate for small, local code explanations it can do with a direct read.",
+      "prompt": "What does this one function `parseUserInput` do in the file I have open? Just explain it to me.",
+      "expected": {
+        "should_delegate": false,
+        "rationale": "A single-function explanation is trivial for the parent to handle with a direct read tool call. Subagent overhead (session creation, context setup) isn't warranted."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": false,
+        "actual_mode": null,
+        "actual_agents": null,
+        "actual_subagent_call": null,
+        "reasoning": "A simple request to explain already-open code. It requires no repository reconnaissance, implementation, research, planning, or independent review; the assistant should answer directly."
+      }
+    },
+    {
+      "id": "negative-trivial-edit",
+      "category": "negative",
+      "description": "LLM should NOT delegate for trivial single-line edits.",
+      "prompt": "Rename the variable `tmp` to `tempBuffer` in this one function I'm looking at.",
+      "expected": {
+        "should_delegate": false,
+        "rationale": "A single rename is a trivial edit. Launching a worker subagent for this would be overkill — the parent can do it directly with the edit tool."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": false,
+        "actual_mode": null,
+        "actual_agents": null,
+        "actual_subagent_call": null,
+        "reasoning": "Renaming a variable within one identified function is a trivial, localized edit and should be performed directly without subagent dispatch."
+      }
+    },
+    {
+      "id": "negative-ambiguous-decision",
+      "category": "negative",
+      "description": "LLM should potentially dispatch to oracle for high-stakes architectural decisions.",
+      "prompt": "I'm about to make a major architectural change: switching our entire data layer from PostgreSQL to MongoDB. Before I do anything, give me your honest assessment of whether this is the right move for our use case of heavy relational queries.",
+      "expected": {
+        "should_delegate": true,
+        "mode": "single",
+        "agent": "oracle",
+        "task_contains": [
+          "PostgreSQL",
+          "MongoDB",
+          "architectural",
+          "assessment"
+        ],
+        "rationale": "High-stakes architectural decision with risk of drift from requirements. The oracle agent is designed to challenge assumptions and provide an unbiased second opinion without editing code."
+      },
+      "result": {
+        "verdict": "pass",
+        "actual_should_delegate": true,
+        "actual_mode": "single",
+        "actual_agents": [
+          "oracle"
+        ],
+        "actual_subagent_call": {
+          "agent": "oracle",
+          "task": "Assess whether migrating the entire data layer from PostgreSQL to MongoDB is appropriate for a use case dominated by heavy relational queries; challenge assumptions, identify tradeoffs and risks, and give an honest recommendation without making changes."
+        },
+        "reasoning": "This is a high-impact, ambiguous architectural decision requesting an independent, critical assessment rather than implementation or research. A single oracle delegation is the best fit to challenge the proposed migration and assess relational-query tradeoffs."
+      }
+    }
+  ],
+  "agent_registry_snapshot": {
+    "description": "These are the agent descriptions the LLM sees via { action: 'list' } when deciding whether to delegate.",
+    "agents": [
+      {
+        "name": "scout",
+        "description": "Fast codebase recon that returns compressed context for handoff"
+      },
+      {
+        "name": "researcher",
+        "description": "Web/docs research with sources: official docs, specs, benchmarks, recent changes, and a concise research brief"
+      },
+      {
+        "name": "planner",
+        "description": "A concrete implementation plan from existing context. It should read and plan, not edit code"
+      },
+      {
+        "name": "worker",
+        "description": "Implementation work, including approved oracle handoffs. It edits files, validates, and escalates unapproved decisions instead of guessing"
+      },
+      {
+        "name": "reviewer",
+        "description": "Code review and small fixes. It checks the implementation against the task/plan, tests, edge cases, and simplicity"
+      },
+      {
+        "name": "oracle",
+        "description": "A second opinion before acting. It challenges assumptions, catches drift, and recommends the safest next move without editing"
+      },
+      {
+        "name": "context-builder",
+        "description": "A stronger setup pass before planning: gathers code context and writes handoff material such as context.md and meta-prompt.md"
+      },
+      {
+        "name": "delegate",
+        "description": "A lightweight general delegate when you want a child agent that behaves close to the parent session"
+      },
+      {
+        "name": "advisor",
+        "description": "Claude Code-compatible alias for oracle"
+      }
+    ]
+  },
+  "run": {
+    "executed_at": "2026-07-30T10:15:00Z",
+    "executor": "parallel reviewers (fresh context, concurrency 8)",
+    "total_evals": 17,
+    "passed": 17,
+    "failed": 0
+  },
+  "summary": {
+    "single-agent": {
+      "total": 5,
+      "passed": 5,
+      "failed": 0,
+      "evals": [
+        "single-scout-codebase",
+        "single-reviewer-diff",
+        "single-researcher-external",
+        "single-planner-design",
+        "single-worker-implement"
+      ]
+    },
+    "chain": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "evals": [
+        "chain-scout-then-plan",
+        "chain-research-then-implement",
+        "chain-review-then-fix-loop"
+      ]
+    },
+    "parallel": {
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "evals": [
+        "parallel-multi-perspective-review",
+        "parallel-scout-and-research",
+        "parallel-frontend-backend-review"
+      ]
+    },
+    "complex": {
+      "total": 2,
+      "passed": 2,
+      "failed": 0,
+      "evals": [
+        "complex-orchestration-full-workflow",
+        "complex-implement-then-self-review"
+      ]
+    },
+    "negative": {
+      "total": 4,
+      "passed": 4,
+      "failed": 0,
+      "evals": [
+        "negative-simple-question",
+        "negative-explain-existing-code",
+        "negative-trivial-edit",
+        "negative-ambiguous-decision"
+      ]
+    }
+  },
+  "analysis": {
+    "key_findings": [
+      "Zero false positives: the LLM never delegated when it should not have (all 4 negative evals passed).",
+      "Zero false negatives: the LLM always delegated when the task warranted it (all 13 positive evals passed).",
+      "Correct agent selection: in every single-agent case, the LLM picked the semantically correct agent (scout for recon, reviewer for review, researcher for external search, planner for planning, worker for implementation, oracle for high-stakes advisory).",
+      "Correct mode selection: the LLM correctly distinguished between single (independent task), chain (sequential dependency), and parallel (concurrent independence) every time.",
+      "Natural-language-only prompts: none of the 17 prompts mentioned any agent name. The LLM inferred the right agent purely from task semantics and the agent registry from { action: 'list' }.",
+      "Complex orchestration: the LLM correctly constructed multi-agent chains with embedded parallel stages for the two complex evals, matching the staged pattern from the pi-subagents documentation.",
+      "The oracle dispatch for the PostgreSQL→MongoDB migration decision (negative-ambiguous-decision) confirms the LLM recognizes high-stakes architecture decisions as oracle territory, not as simple questions."
+    ],
+    "conclusion": "The LLM reliably dispatches to subagents based on prompt semantics alone, without requiring users to name agents explicitly. The dispatch mechanism mirrors skill scheduling: the LLM reads the agent registry, evaluates the task's complexity and fit, and autonomously decides whether, which, and how to delegate."
+  }
+}

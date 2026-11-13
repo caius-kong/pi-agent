@@ -1,0 +1,34 @@
+{
+  "subagents": {
+    "defaultModel": "trendmicro/deepseek-v4.1-flash",
+    "defaultThinking": "high",
+    "artifactDir": "temp",
+    "timeoutMs": 2700000,
+    "agentOverrides": {
+      "oracle": {
+        "model": "trendmicro/gpt-6.1-sol",
+        "thinking": "high"
+      },
+      "worker": {
+        "model": "trendmicro/deepseek-v4.1-flash",
+        "thinking": "max"
+      },
+      "reviewer": {
+        "model": "trendmicro/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "scout": {
+        "model": "trendmicro/deepseek-v4.1-flash",
+        "thinking": "low"
+      },
+      "researcher": {
+        "model": "trendmicro/deepseek-v4.1-flash",
+        "thinking": "high"
+      },
+      "plan": {
+        "model": "trendmicro/gpt-6.1-sol",
+        "thinking": "medium"
+      }
+    }
+  }
+}

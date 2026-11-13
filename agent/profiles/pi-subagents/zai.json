@@ -1,0 +1,29 @@
+{
+  "subagents": {
+    "defaultModel": "zai/glm-5.3-flash",
+    "defaultThinking": "max",
+    "artifactDir": "temp",
+    "agentOverrides": {
+      "oracle": {
+        "model": "zai/glm-5.3",
+        "thinking": "high"
+      },
+      "worker": {
+        "model": "zai/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "reviewer": {
+        "model": "zai/glm-5.3-flash",
+        "thinking": "max"
+      },
+      "scout": {
+        "model": "zai/glm-5.3-flash",
+        "thinking": "low"
+      },
+      "researcher": {
+        "model": "zai/glm-5.3-flash",
+        "thinking": "low"
+      }
+    }
+  }
+}

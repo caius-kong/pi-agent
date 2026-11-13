@@ -1,0 +1,101 @@
+# Pi Agent Configuration — Gitignore
+#
+# Principles:
+#  - Track: hand-written config, extensions, prompts, agent definitions
+#  - Ignore: personal/project memory, npm dependencies, large binaries, session data, runtime state, auto-generated files
+
+# === npm dependencies (managed by settings.json packages array) ===
+agent/npm/
+
+# node_modules anywhere (incl. local test symlinks into the pnpm store)
+node_modules/
+
+# === Large binary files ===
+models/
+agent/bin/
+
+# === Runtime state & sessions (databases, backups, locks) ===
+agent/sessions/
+agent/.pi-hermes-locks.sqlite*
+agent/run-history.jsonl
+agent/models-store.json
+*.bak
+*.db
+*.db-shm
+*.db-wal
+.consolidation-locks/
+*/projects-memory/.pi-hermes-locks.sqlite*
+
+# === Auth ===
+agent/auth.json
+
+# === Auto-generated config ===
+# agent/hermes-memory-config.json
+agent/models-store.json
+
+# === Externally managed extensions (installed by Orca / Herdr, overwritten on reinstall) ===
+agent/extensions/orca-*.ts
+agent/extensions/herdr-agent-state.ts
+
+# === Sub-agent temporary artifacts ===
+.pi-subagents/
+agent/pi-subagents/
+
+# === Hermes memory recovery snapshots (auto-generated) ===
+*.recovery-*
+*.retired-*
+
+# === Hermes migration markers ===
+.skills-migrated-*
+
+# === Skills are external ===
+# No skill lives in this repo: ~/dev/caius-kong/skills owns them and
+# `link-skills.sh pi` creates the local links (plus the generated
+# hindsight-coding-agent skill bootstrap installs).
+agent/skills/*
+
+# === Auto-generated skill lock ===
+skills-lock.json
+
+# === Auth / secrets ===
+web-search.json
+
+# === Credential file shapes (defense in depth: the named files above only cover
+# what this repo already manages, these cover what a future edit might add) ===
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+credentials
+keys.env
+.npmrc
+.netrc
+*.kubeconfig
+
+# === OS ===
+.DS_Store
+agent/handoff/
+agent/missions/index/
+agent/permission-gate-allowlist.json
+
+# === pi-hermes-memory personal/project memory ===
+agent/pi-hermes-memory/
+agent/projects-memory/
+
+.pi/subagents
+agent/missions/
+web-search-cache/
+
+# === Git clone cache ===
+agent/git/
+agent/profiles/pi-subagents/notes/
+# Internal gateway rates, upstream routing and model-alias notes: personal
+# research, not repo functionality. The profile JSONs still ship.
+agent/profiles/pi-subagents/README.md
+agent/model-vendor-specs.md
+AGENTS-optimization-report.md
+agent/pi-cc-extensions.json
+agent/worktrees/

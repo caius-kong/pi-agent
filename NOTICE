@@ -1,0 +1,23 @@
+NOTICE
+
+This repository contains code derived from the pi coding agent
+(https://github.com/earendil-works/pi-mono, published on npm as
+@earendil-works/pi-coding-agent), Copyright (c) 2025 Mario Zechner,
+licensed under the MIT License.
+
+Verbatim copies from that package's examples/extensions/:
+
+  agent/extensions/bookmark.ts
+  agent/extensions/protected-paths.ts
+  agent/extensions/send-user-message.ts
+  agent/extensions/system-prompt-header.ts
+
+Adapted from examples/extensions/:
+
+  agent/extensions/git-checkpoint.ts
+
+Rewritten from an examples/extensions/ starting point and credited as a
+courtesy, not as a derivative work:
+
+  agent/extensions/permission-gate/
+  agent/extensions/notify/
