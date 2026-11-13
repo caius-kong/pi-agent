@@ -25,7 +25,7 @@
   },
   "subagents": {
     "agentScanDirs": [
-      "/Users/caius_kong/.pi/agent/skills/planner-executor-pipeline/agents"
+      "~/.pi/agent/skills/planner-executor-pipeline/agents"
     ],
     "defaultModel": "trendmicro/deepseek-v4.1-flash",
     "defaultThinking": "high",
@@ -62,7 +62,7 @@
   "showCacheMissNotices": true,
   "enableInstallTelemetry": false,
   "extensions": [
-    "/Users/caius_kong/.hindsight/coding-agents/dist/pi.js"
+    "~/.hindsight/coding-agents/dist/pi.js"
   ],
   "auto-agent-loop": {
     "enable": true,

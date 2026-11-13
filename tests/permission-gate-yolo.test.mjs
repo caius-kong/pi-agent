@@ -29,7 +29,7 @@ function fakePi() {
   };
 }
 
-function context({ cwd = "/Users/caius_kong", choice = "YOLO - this session", hasUI = true } = {}) {
+function context({ cwd = "~", choice = "YOLO - this session", hasUI = true } = {}) {
   const notices = [];
   let selectCount = 0;
   return {
@@ -107,7 +107,7 @@ test("choosing YOLO in the approval dialog confirms it and arms subsequent dange
 
     assert.equal(first, undefined);
     assert.deepEqual(ctx.notices, [{
-      message: "YOLO armed for this session (cwd: /Users/caius_kong). Dangerous commands auto-approve; hard-deny still enforced.",
+      message: "YOLO armed for this session (cwd: ~). Dangerous commands auto-approve; hard-deny still enforced.",
       level: "info",
     }]);
 
