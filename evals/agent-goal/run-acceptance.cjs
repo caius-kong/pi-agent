@@ -13,7 +13,7 @@
  * conversation. It needs a model that follows tool guidelines; weaker models
  * under-declare, so a failing run is a model signal as much as a code signal.
  *
- * Usage: node run-acceptance.cjs [--model <provider/model>]
+ * Usage: node run-acceptance.cjs [--model <provider/model>] [--thinking <level>]
  * Exit: 0 if every tracking assertion holds.
  */
 const { spawn } = require("node:child_process");
@@ -27,11 +27,12 @@ const SESS_DIR = path.join(ROOT, "sessions");
 const WORK = path.join(ROOT, "work");
 const PAYLOAD_LOG = path.join(ROOT, "payloads.jsonl");
 const SID = "accept-goal-tracking";
-const MODEL = (() => {
-  const i = process.argv.indexOf("--model");
-  if (i !== -1 && process.argv[i + 1]) return process.argv[i + 1];
-  return process.env.ACC_MODEL || "trendmicro/deepseek-v4.1-flash";
-})();
+const arg = (name) => {
+  const i = process.argv.indexOf(name);
+  return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : undefined;
+};
+const MODEL = arg("--model") || process.env.ACC_MODEL || "trendmicro/deepseek-v4.1-flash";
+const THINKING = arg("--thinking") || process.env.ACC_THINKING || "high";
 
 const clean = (s) => (s || "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim();
 const cleanDeep = (v) => (Array.isArray(v) ? v.map(cleanDeep) : typeof v === "string" ? clean(v) : v);
@@ -66,7 +67,7 @@ const proc = spawn("pi", [
   "-e", EXT,
   "-e", PROBE,
   "--approve",
-  "--thinking", process.env.ACC_THINKING || "low",
+  "--thinking", THINKING,
   "--model", MODEL,
 ], {
   cwd: WORK,

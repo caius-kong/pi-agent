@@ -28,7 +28,7 @@
 - **不主动调用模型**：扩展自身不发起任何模型请求。
 - **prompt 侧固定占用**：启用且有 UI 时，实测（本仓库当前版本，渲染后的 system prompt 文本）新增 **1517 字符**——`<rules>` 中 5 条 guideline 渲染后共 1427 字符（含 `- ` 前缀）+ `<tools>` 中 `- set_goal: <snippet>` 一行 90 字符。token 数取决于模型 tokenizer，这里不给承诺值；按 4 字符/token 粗估约 320 token（仅估算）。关闭或无 UI 时为 0。
 - **调度成本（预期内）**：`set_goal` 由模型按需调度，若它独占一次响应就会多一次模型往返。guideline 要求把它放进本轮第一个工具调用的同一响应、不要单独占一次响应，并禁止只为刷新显示多花往返。真实会话实测：`trendmicro/deepseek-v4.1-flash`（eval 默认）6 轮 0 次独占响应；`gpt-6.1-sol` 6 轮 6 次。两种都是可接受的调度成本。
-- **依赖模型遵循 guideline**：同一个 6 轮真实会话里，`deepseek-v4-flash-0731` 只在起点和 pivot 各声明一次，新增约束与同 outcome 延续都不调用，目标行因此变陈旧。显示层不做补偿性推断；换用遵循度低的模型时，目标追踪会变差。
+- **依赖模型遵循 guideline**：同一个 6 轮真实会话（`run-acceptance.cjs`）的实测通过率——`gpt-6.1-sol` @medium 3/3；`deepseek-v4.1-flash` @high 约 6/10（失败集中在"新增约束时完全不声明"和偶发的起点不声明）；`deepseek-v4-flash-0731` 基本只在起点和 pivot 声明。显示层不做补偿性推断，因此目标追踪的可靠性取决于模型是否遵循 guideline。
 
 ## 配置
 
