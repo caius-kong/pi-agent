@@ -244,7 +244,7 @@ podman events --stream=false --since 24h --filter event=died --format '{{.Time}}
 podman machine ssh free -m          # 看 available 与 Swap 行
 ```
 
-`oom=true` 或 `restarts` 持续增长就是内核 OOM kill：容器 exit code 0、日志无 traceback，因为被 SIGKILL 的是进程本身。VM 无 swap，余量不足时内核挑最大的进程杀，通常正是 API。
+`oom=true` 或 `restarts` 持续增长就是内核 OOM kill：容器 exit code 0、日志无 traceback，因为被 SIGKILL 的是进程本身。VM 无 swap，余量不足时内核挑最大的进程杀，通常正是 API。注意 `oom` 标志会保留上一次实例的死因，所以要与 `restarts` 和“最近是否有新的 died 事件”一起读。
 
 **处置**：抬高 VM 内存，宿主机不够就换机器——Podman 的 applehv VM 不提供 swap 配置，加 swap 不是选项。
 
