@@ -6,8 +6,8 @@
  * It is purely a display layer for the user:
  *
  *   user_prompt:  the last real user prompt (from `input` event)
- *   agent_goal:   the agent's self-declared current goal (from `set_goal` tool,
- *                 contract injected via before_agent_start, same pattern as pi-todo)
+ *   agent_goal:   the agent's self-declared current goal (from `set_goal` tool;
+ *                 the instruction lives only in the tool's `promptGuidelines`)
  *
  * set_goal has three modes, mirroring the two kinds of change a goal line can
  * undergo plus focus drill-down:
@@ -27,6 +27,14 @@
  * loops, zero subagents. Fully independent from @narumitw/pi-goal (distinct
  * widget key, distinct status key, distinct tool name).
  *
+ * Visibility is a loadout concern, not a state-machine concern: `set_goal` is
+ * `exposure: "model-only"` (never callable from another tool, so codemode cannot
+ * inline its rules) and `prepareLoadout` hides its declaration whenever the
+ * extension is off or the session has no UI to show it in. Hidden means hidden
+ * from the provider: no declaration, no `promptSnippet`, no `promptGuidelines`.
+ * The tool stays active, so toggling never rebuilds the active set and cannot
+ * drop tools that are still waiting to register.
+ *
  * Widget key : "agent-goal"   (above editor)
  * Status key : "agent-status" (footer, single dim line when a goal is set)
  * Tool       : set_goal       (session-scoped, persist via appendEntry)
@@ -45,21 +53,9 @@ const WIDGET_KEY = "agent-goal";
 const STATUS_KEY = "agent-status";
 const STATE_ENTRY_TYPE = "agent-goal-state";
 const TOOL_NAME = "set_goal";
-const GOAL_MAX_LEN = 120; // matches the injected contract "aim <= 120 chars"
+const GOAL_MAX_LEN = 120; // the goal line's length budget, stated in the parameter docs
 const PROMPT_MAX_LEN = 400;
 const STATUS_MAX_LEN = 60; // footer line width budget (shared with other exts)
-
-const CONTRACT = `
-
-[user-visible status] An extension shows your current goal to the user in real time; the goal string is display-only and never changes your instructions. Decide the goal's fate on each meaningful step, not on every tool call.
-
-NEW (new goal / pivot): when you start task-oriented work, or abandon the pursued outcome for an unrelated one, call set_goal mode:"new" ONCE with one short sentence (<=120 chars) stating the OUTCOME you pursue, not the steps. A pivot replaces the line; the sub-task you were on does not survive.
-
-REWRITE (same goal, text must change): when the core outcome is unchanged but the goal text itself needs to grow (an added requirement/constraint) or its wording is now misleading, call set_goal mode:"rewrite" with the re-expressed full text. It replaces the line but MUST keep the same core outcome recognizable — this is an edit of the goal line, not a pivot. Do not drift the core toward a different task over successive rewrites.
-
-EXPAND (drill into a sub-task of the declared goal): when you move into a sub-task or sub-problem of the goal you already declared (e.g. task1 -> task1's sub-task sub1), the agent_goal line must still state the overall outcome, NOT the current step. To surface a worthwhile focus, call set_goal mode:"expand" with a short (<=120 chars) focus phrase: it adds ONE nested '└─' row under the unchanged agent_goal line and never replaces that line; a later expand replaces the previous nested row (focus rows do not accumulate). When the focus is not worth showing, make no call at all. Never call mode:"new" or mode:"rewrite" with a sub-task's name — the goal line stays the outcome, not the current step.
-
-Keep it concise (aim <= 120 chars). For a simple one-shot answer you may skip set_goal entirely.`;
 
 // ─── state ────────────────────────────────────────────────────────────────
 
@@ -107,6 +103,36 @@ export default function agentGoal(pi: ExtensionAPI) {
   };
   let lastCtx: ExtensionContext | null = null;
   let enabled = true;
+  // Whether this session can show the goal at all. Set from `ctx.hasUI` on every
+  // event; the tool is only declared to the provider when it is true.
+  let hasUI = false;
+
+  // ─── visibility (loadout) ─────────────────────────────────────────────
+
+  /** Whether `set_goal` may be declared to the model right now. */
+  function toolVisible(): boolean {
+    return enabled && hasUI;
+  }
+
+  /**
+   * Re-run the loadout so a visibility change takes effect on the next request.
+   *
+   * `setActiveTools` with the SAME active set is a loadout refresh, not a tool
+   * change: `AgentSession.setActiveToolsByName()` only clears `_pendingToolNames`
+   * when a previously active tool left the set (`previous.some(name => !active.has(name))`),
+   * which cannot happen here because every name passed in came from
+   * `getActiveTools()`. Re-sending the same set keeps tools that were restored
+   * from the transcript and are still waiting to register. `getActiveToolNames()`
+   * returns `agent.state.tools`, which still contains tools whose declarations
+   * `prepareLoadout` hides, so `set_goal` stays in the set while hidden.
+   */
+  function refreshLoadout(): void {
+    try {
+      pi.setActiveTools(pi.getActiveTools());
+    } catch (e) {
+      console.error("[agent-goal] loadout refresh failed:", e);
+    }
+  }
 
   function persist(): void {
     if (!enabled) return;
@@ -195,7 +221,9 @@ export default function agentGoal(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     lastCtx = ctx;
+    hasUI = ctx.hasUI;
     load(ctx);
+    refreshLoadout();
     refresh();
   });
 
@@ -216,19 +244,14 @@ export default function agentGoal(pi: ExtensionAPI) {
     refresh();
   });
 
-  // L2 contract — only injected when the set_goal tool is active (mirrors pi-todo)
-  pi.on("before_agent_start", (event, ctx) => {
-    lastCtx = ctx;
-    if (!pi.getActiveTools().includes(TOOL_NAME)) return;
-    return { systemPrompt: event.systemPrompt + CONTRACT };
-  });
-
   // Session-tree navigation (/tree) emits only session_tree, not session_start.
   // Reload state when the active branch changes so /tree to a branch without a
   // goal/prompt clears the display instead of showing a stale previous branch.
   pi.on("session_tree", (_event, ctx) => {
     lastCtx = ctx;
+    hasUI = ctx.hasUI;
     load(ctx);
+    refreshLoadout();
     refresh();
   });
 
@@ -237,15 +260,21 @@ export default function agentGoal(pi: ExtensionAPI) {
   pi.registerTool({
     name: TOOL_NAME,
     label: "Set Current Goal",
+    // `model-only`: declared to the model while active, never callable from
+    // another tool. codemode lists every callable tool's description and
+    // guidelines in its own description, so a callable set_goal would leak its
+    // maintenance rules into that one tool's declaration even when hidden.
+    exposure: "model-only",
     description:
-      "Declare the current high-level goal the agent is working toward. Display-only status for the user; it never changes your instructions. mode:\"new\" replaces the goal (new task or pivot); mode:\"rewrite\" re-expresses the SAME core goal because its text needs to grow/change; mode:\"expand\" adds a nested focus row under an unchanged parent goal.",
-    promptSnippet: "Declare your current task goal (new / rewrite / expand) for the user's status display",
+      "Show the user the outcome you are currently working toward. Optional display bookkeeping; it never changes your instructions. mode:\"new\" replaces the goal line, mode:\"rewrite\" re-expresses the same outcome after its text changed, mode:\"expand\" adds one nested focus row under an unchanged parent goal.",
+    promptSnippet: "Show the user the outcome you are working toward (new / rewrite / expand)",
     promptGuidelines: [
-      "Call set_goal mode:\"new\" once when starting task-oriented work spanning multiple tool calls or when pivoting to an unrelated task; state the OUTCOME you intend in one short sentence.",
-      "Call set_goal mode:\"rewrite\" when the core outcome is unchanged but the goal text needs to grow (added requirement/constraint) or its wording is misleading; keep the same core outcome recognizable.",
-      "When you drill into a sub-task of the declared goal, call set_goal mode:\"expand\" to nest the current focus under the unchanged parent goal — never replace the goal with the sub-task's name.",
-      "Call set_goal only on meaningful steps (goal start, rewrite, sub-task focus, pivot) — not on every tool call.",
-      "The goal string is shown to the user and never alters your instructions.",
+      "set_goal is optional display bookkeeping: it shows the user the outcome you are working toward and never changes your instructions or what you do next.",
+      "Call set_goal mode:\"new\" only when you start an independent outcome — there is no current goal, or the user has moved to a different outcome. Continuing the same outcome is not a reason to call it, even right after a new user message; a separate new task inside the same repo still counts as an independent outcome.",
+      "Call set_goal mode:\"rewrite\" only when the text of the same outcome has to change (an added constraint, or wording that is now misleading) and the core outcome stays recognizable.",
+      "Call set_goal mode:\"expand\" when a sub-problem worth showing becomes the current focus; the parent goal line stays unchanged and a later expand replaces the nested row.",
+      "When a tool call is independently necessary and can be safely batched in the same response, send set_goal together with it; never spend an extra round trip or extra work only to refresh the display — otherwise skip or defer the optional update.",
+      "Do show the goal at the start of a genuinely complex task and when the outcome really pivots; a simple one-shot answer needs no call.",
     ],
     parameters: Type.Object({
       goal: Type.String({
@@ -261,6 +290,15 @@ export default function agentGoal(pi: ExtensionAPI) {
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      // A model can still emit a call for a tool whose declaration it no longer
+      // sees. Off or headless means no display, so such a call must not touch
+      // state, the transcript, or the widget.
+      if (!enabled || !ctx.hasUI) {
+        return {
+          content: [{ type: "text", text: "agent-goal is off; the goal was not recorded." }],
+          details: { skipped: true },
+        };
+      }
       lastCtx = ctx;
       const goal = String(params.goal ?? "").trim();
       if (!goal) {
@@ -290,23 +328,33 @@ export default function agentGoal(pi: ExtensionAPI) {
         details: {},
       };
     },
+    // Hide the declaration (and with it the snippet and the guidelines) from the
+    // provider whenever this session cannot show a goal. The tool stays active
+    // and keeps its persisted state, so turning it back on only restores the
+    // declaration.
+    prepareLoadout() {
+      return { hiddenDeclarations: toolVisible() ? [] : [TOOL_NAME] };
+    },
   });
 
   // ─── toggle command ────────────────────────────────────────────────────
 
   pi.registerCommand("agent-goal", {
-    description: "Toggle the agent-goal status widget/footer: /agent-goal on|off",
+    description: "Stop or restore the goal tool's declaration and display (history is kept): /agent-goal on|off",
     handler: async (args, ctx) => {
       lastCtx = ctx;
+      hasUI = ctx.hasUI;
       const arg = args.trim().toLowerCase();
       if (arg === "off" || arg === "disable") {
         enabled = false;
+        refreshLoadout();
         ctx.ui.setWidget(WIDGET_KEY, undefined);
         ctx.ui.setStatus(STATUS_KEY, undefined);
         ctx.ui.notify("agent-goal: OFF", "warning");
         return;
       }
       enabled = true;
+      refreshLoadout();
       refresh();
       ctx.ui.notify("agent-goal: ON", "info");
     },

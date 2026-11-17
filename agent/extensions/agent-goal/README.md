@@ -8,10 +8,30 @@
 
 ## 行为
 
-1. **目标注入（contract）** — `before_agent_start` 每轮注入 ~680B CONTRACT，提醒长任务启动时调用 `set_goal` 工具自报目标。工具定义常驻工具清单。
-2. **显示** — widget 两行灰字 `user_prompt` / `agent_goal` + footer 单行 `⛳`。零额外 LLM 调用、无 timer、纯事件驱动。
-3. **持久化** — session entry（JSONL），随 session 走而非全局文件（与 pi-goal 相同模式）。
+1. **指令只有一处** — 全部写在 `set_goal` 工具的 `promptGuidelines` 里（外加一行 `promptSnippet` 和 `description`）。本扩展**不返回 `systemPrompt`、不设 `forceSystemPrompt`、不写 `sections[...]`**，所以不会顶掉其他扩展对结构化 prompt 的修改。
+2. **显示** — widget 两行灰字 `user_prompt` / `agent_goal` + footer 单行 `⛳`。无 timer、无循环、无后台任务、无子代理，纯事件驱动。
+3. **持久化** — session entry（`agent-goal-state`，JSONL），随 session 走而非全局文件（与 pi-goal 相同模式）。
 4. **切换 branch** — `session_tree` 时先清空本地状态再从**当前分支**重读；切到没有目标条目的 branch 就显示空，不沿用上一条 branch 的残留（`getEntries()` 含全部 branch，所以只扫 `getBranch()`）。
+
+## 可见性（OFF / headless）
+
+`set_goal` 声明为 `exposure: "model-only"`，并由 `prepareLoadout` 在**扩展关闭（`/agent-goal off`）或会话没有 UI（`ctx.hasUI === false`，如 `pi -p`）**时隐藏自己的声明。
+
+隐藏的实际含义：provider 收到的请求里**没有该工具的声明、没有 `promptSnippet`、也没有它的 `promptGuidelines`**；`codemode` 的 description 里也不会出现它（见下）。工具本身仍在 active 集合里，所以开关只改「是否声明」，不改 active 集合——`/agent-goal on` 不会把被外部 `--exclude-tools` / loadout 排除掉的 `set_goal` 加回来。
+
+**可达性取舍**：`model-only` 的工具不能被其他工具经 `ctx.executeTool()` 调用。`codemode` 会把每个 callable 工具的 description 和 `promptGuidelines` 内联进自己的 description，因此可调用的 `set_goal` 即使隐藏了独立声明，仍会在 `codemode.mode="only"` 下把「如何维护目标」的规则泄漏给模型。`model-only` 消除这条泄漏；代价是其他工具（如 codemode 脚本）不能再间接调用 `set_goal`。对「主代理自报显示状态」这个用途没有损失。
+
+**OFF 不清理历史**：`/agent-goal off` 停止声明与显示，已经写进 session JSONL 的 `agent-goal-state` 条目和 tool 调用记录都保留（不重写 transcript）。模型仍可能凭记忆发出一次 `set_goal` 调用；此时 `execute` 直接返回、不改状态、不写 entry、不刷新 widget。
+
+## 成本
+
+- **不主动调用模型**：扩展自身不发起任何模型请求。
+- **prompt 侧固定占用**：启用且有 UI 时，实测（本仓库当前版本，渲染后的 system prompt 文本）新增 **1293 字符**——`<rules>` 中 6 条 guideline 渲染后共 1208 字符（含 `- ` 前缀）+ `<tools>` 中 `- set_goal: <snippet>` 一行 85 字符。token 数取决于模型 tokenizer，这里不给承诺值；按 4 字符/token 粗估约 320 token（仅估算）。关闭或无 UI 时为 0。
+- **可能的 round trip**：`set_goal` 若独占一次响应，会多一次模型往返。因此 guideline 明确要求：只在有独立必要且可安全合并的工具调用时顺带发出，**不得只为刷新状态制造额外 round trip**，否则省略或延后。
+
+## 配置
+
+零配置。`/agent-goal on|off`：停止或恢复工具声明与显示（不清理历史 transcript）。
 
 ## 与 `@narumitw/pi-goal` 区别
 
@@ -22,18 +42,11 @@
 | 熔断/控制 | 无 | 有（自动推进 + 熔断） |
 | 冲突 | 不冲突，widget/status/tool key 均独立 | — |
 
-## 成本
-
-- 每轮固定 ~200–500 token（<1% 上下文窗），不随对话增长
-- `set_goal` 每次调用 goal ≤120 char
-- 零引入工具调用开销
-
-## 配置
-
-零配置。`/agent-goal on|off` 开关。
-
 ## 实现
 
 | 文件 | 作用 |
 |---|---|
-| `index.ts` | 注册入口（~292 行），含状态机、widget 渲染、contract 注入 |
+| `index.ts` | 注册入口，含状态机、widget 渲染、`prepareLoadout` 可见性开关、`/agent-goal` 命令 |
+| `../../tests/agent-goal-state.test.mjs` | 状态机单测（mock ExtensionAPI） |
+| `../../tests/agent-goal-runtime.test.mjs` | 真实 `AgentSession` / `ExtensionRunner` 回归：不强制 system prompt、OFF/headless 可见性、同 run 内 OFF、其他工具不受影响、codemode `on`/`only` 不泄漏 |
+| `../../evals/agent-goal/run-eval.cjs` | 真实模型端到端 eval（RPC 模式断言 widget/status + 状态层） |
