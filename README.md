@@ -74,11 +74,20 @@ curl -fsSL https://raw.githubusercontent.com/caius-kong/pi-agent/main/bootstrap.
 | 扩展 | 类型 | 一句话功能 | 命令/配置 |
 |---|---|---|---|
 | **notify** | 通知 | agent settle 后发一次系统通知（macOS/Linux/Herdr） | `terminal-notifier` 权限 |
-| **agent-goal** | 显示 | 实时显示主代理当前目标 + 最后用户 prompt | `/agent-goal on\|off` |
+| **agent-goal** | 显示 | 实时显示主代理当前目标 + 最后用户 prompt（编辑器上方 widget） | `/agent-goal on\|off` |
 | **auto-agent-loop** | 续跑控制 | Flash 总结会话状态，Jev 判断是否还有已授权可自主执行的必要工作；有则续跑 | `/auto-agent-loop on\|off\|status`、`settings.json` 的 `auto-agent-loop` 键 |
-| **permission-gate** | 安全 | 官方 example 深度改写: hard-deny 底线 + YOLO 模式（会话级，或 `permission-gate.yolo` 持久开启，默认 false）+ allowlist + git force-push 语义 | `/yolo`、`permission-gate.yolo` in `settings.json`、`~/.pi/agent/permission-gate-allowlist.json` |
+| **permission-gate** | 安全 | 官方 example 深度改写: hard-deny 底线 + YOLO 模式（会话级，或 `permission-gate.yolo` 持久开启，默认 false）+ allowlist + git force-push 语义；YOLO 生效时 footer 显示 `yolo: on` | `/yolo`、`permission-gate.yolo` in `settings.json`、`~/.pi/agent/permission-gate-allowlist.json` |
 | **session-budget** | 成本 | settings 驱动的会话成本硬上限（含 subagent） | `sessionBudget` in `settings.json`、`/budget [usd\|off]` |
 | **auto-compact** | 成本/性能 | context 超阈值时由模型选择安全检查点压缩，并在 Pi boundary 续跑；带 `cost.tiers` 的模型（如 `gpt-6.1-sol` 在 272k input tokens 后单价翻倍）阈值自动压到 tier 边界之下 | `/auto_compact [0-100\|off]`、`settings.json` 的 `auto_compact` 键（`compressionThresholdPercent` 默认 `40`、`enableCostTiersOverrideThreshold` 默认 `true`） |
+| **system-prompt-header** | 显示 | footer 显示当前 system prompt 的估算 token 数（chars/4，与 pi 的 context 统计同口径） | — |
+
+### footer 状态行
+
+各扩展 `ctx.ui.setStatus()` 的内容拼成 footer 的最后一行：**按状态 key 字母序排列**，**不换行**，超宽从尾部截断（`truncateToWidth`，尾缀 `...`）。当前顺序：
+
+`yolo: on` → `auto-agent-loop: on|off` → `● 🐴 ponytail: ⚡ FULL` → `Budget $x / $y` → `System: ~Nk tok`（子代理运行期间在 `Budget` 之后临时插入 `running...` / `12 tools bash`）
+
+加新状态时，key 名就是唯一的排序手段（例如 `agent-yolo` 正好排在 `auto-agent-loop` 前）；把必须看见的放前面，因为被截掉的是尾部。目标类信息走 widget（编辑器上方），不占这唯一的一行。
 
 ## 测试
 

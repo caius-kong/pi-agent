@@ -60,5 +60,5 @@ YOLO 生效时 footer 显示 `yolo: on`（warning 色），未生效时什么都
 
 | 文件 | 作用 |
 |---|---|
-| `index.ts` | 入口（~329 行）：hard-deny 判定、YOLO 模式、allowlist CRUD、git force-push 语义 |
+| `index.ts` | 入口（~415 行）：hard-deny 判定、YOLO 模式、footer `yolo: on` 指示、allowlist CRUD、git force-push 语义 |
 | `../lib/system-notification.ts` | 系统通知投递（仅交互式审批等待时播放 Glass 音效） |
