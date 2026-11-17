@@ -40,6 +40,11 @@
  * hardDenyPatterns below (the safety floor that is ALWAYS enforced, so an
  * overnight run can never wipe the machine).
  *
+ * The footer carries the switch as "yolo: on" while the gate is disarmed,
+ * and nothing at all while it is armed (absence already means off).  The
+ * status key is "agent-yolo" because pi sorts footer statuses by key:
+ * agent-status < agent-yolo < auto-agent-loop.
+ *
  * Only the settings switch persists.  Dialog/command YOLO is in-memory and
  * session-scoped: it expires when the pi process exits, and applies only to
  * tool calls rooted at the cwd that was active when it was armed.
@@ -273,7 +278,28 @@ function yoloActive(ctxCwd: string): boolean {
   return ctxCwd === yoloCwd || ctxCwd.startsWith(yoloCwd.replace(/\/+$/, "") + "/");
 }
 
+// Footer switch.  "agent-yolo" sorts between "agent-status" and
+// "auto-agent-loop", which is the order we want on the single status line.
+const STATUS_KEY = "agent-yolo";
+
+function showStatus(ctx: {
+  hasUI: boolean;
+  ui: { setStatus(key: string, text: string | undefined): void; theme?: { fg(color: string, text: string): string } };
+}): void {
+  if (!ctx.hasUI) return;
+  settingsYolo ??= readSettingsYolo();
+  const on = settingsYolo || yoloCwd !== undefined;
+  const text = "yolo: on";
+  ctx.ui.setStatus(STATUS_KEY, on ? (ctx.ui.theme ? ctx.ui.theme.fg("warning", text) : text) : undefined);
+}
+
 export default function (pi: ExtensionAPI) {
+  // The settings switch applies from the first tool call, so the footer must
+  // show it from the start rather than waiting for the first /yolo.
+  pi.on("session_start", (_event, ctx) => {
+    showStatus(ctx);
+  });
+
   // ── Slash command: arm / inspect YOLO before leaving ─────────────
   pi.registerCommand("yolo", {
     description:
@@ -283,6 +309,7 @@ export default function (pi: ExtensionAPI) {
       if (arg === "off") {
         yoloCwd = undefined;
         settingsYolo = false; // session-only override of permission-gate.yolo
+        showStatus(ctx);
         ctx.ui.notify("YOLO off - permission gate re-armed", "info");
         return;
       }
@@ -303,6 +330,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       yoloCwd = ctx.cwd;
+      showStatus(ctx);
       ctx.ui.notify(
         `YOLO armed for this session (cwd: ${ctx.cwd}). Dangerous commands auto-approve; hard-deny still enforced.`,
         "info"
@@ -370,6 +398,7 @@ export default function (pi: ExtensionAPI) {
 
     if (choice === "YOLO - this session") {
       yoloCwd = ctx.cwd;
+      showStatus(ctx);
       ctx.ui.notify(
         `YOLO armed for this session (cwd: ${ctx.cwd}). Dangerous commands auto-approve; hard-deny still enforced.`,
         "info"

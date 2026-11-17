@@ -37,6 +37,10 @@
 - `/yolo off` 在本会话内覆盖 settings 的 `true`（不写回文件）。
 - hard-deny 安全底线不受影响。
 
+### 状态栏指示
+
+YOLO 生效时 footer 显示 `yolo: on`（warning 色），未生效时什么都不显示（缺失即 off）。来源是 settings 开关或本会话 arming。状态 key 为 `agent-yolo`：pi 按 key 字母序拼接 footer 状态，该 key 落在 `agent-status` 与 `auto-agent-loop` 之间。
+
 ### 持久化 allowlist
 
 `~/.pi/agent/permission-gate-allowlist.json`，精确命令匹配，命令任一字符变化须重新授权。

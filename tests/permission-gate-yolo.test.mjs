@@ -31,14 +31,17 @@ function fakePi() {
 
 function context({ cwd = "~", choice = "YOLO - this session", hasUI = true } = {}) {
   const notices = [];
+  const statuses = new Map();
   let selectCount = 0;
   return {
     notices,
+    statuses,
     get selectCount() { return selectCount; },
     cwd,
     hasUI,
     ui: {
       notify: (message, level) => notices.push({ message, level }),
+      setStatus: (key, text) => (text === undefined ? statuses.delete(key) : statuses.set(key, text)),
       select: async () => {
         selectCount++;
         return choice;
@@ -260,5 +263,61 @@ test("permission-gate.yolo=false leaves the gate armed", async () => {
     );
     assert.equal(result?.block, true);
     assert.equal(ctx.selectCount, 1, "yolo:false must still prompt");
+  });
+});
+
+test("footer shows yolo: on from session start when settings.json enables it", async () => {
+  await withHarness(async (_notifications, home) => {
+    await writeSettings(home, { "permission-gate": { yolo: true } });
+    const { default: register } = await loadExtension();
+    const pi = fakePi();
+    register(pi);
+    const ctx = context();
+
+    pi.handlers.get("session_start")({}, ctx);
+    assert.equal(ctx.statuses.get("agent-yolo"), "yolo: on");
+  });
+});
+
+test("footer shows nothing when the gate is armed", async () => {
+  await withHarness(async (_notifications, home) => {
+    await writeSettings(home, { "permission-gate": { yolo: false } });
+    const { default: register } = await loadExtension();
+    const pi = fakePi();
+    register(pi);
+    const ctx = context();
+
+    pi.handlers.get("session_start")({}, ctx);
+    assert.equal(ctx.statuses.has("agent-yolo"), false);
+  });
+});
+
+test("footer follows /yolo on and /yolo off within the session", async () => {
+  await withHarness(async (_notifications, home) => {
+    await writeSettings(home, { "permission-gate": { yolo: false } });
+    const { default: register } = await loadExtension();
+    const pi = fakePi();
+    register(pi);
+    const ctx = context();
+    const yolo = pi.commands.get("yolo").handler;
+
+    await yolo("", ctx);
+    assert.equal(ctx.statuses.get("agent-yolo"), "yolo: on");
+
+    await yolo("off", ctx);
+    assert.equal(ctx.statuses.has("agent-yolo"), false);
+  });
+});
+
+test("footer stays hidden for headless sessions", async () => {
+  await withHarness(async (_notifications, home) => {
+    await writeSettings(home, { "permission-gate": { yolo: true } });
+    const { default: register } = await loadExtension();
+    const pi = fakePi();
+    register(pi);
+    const ctx = context({ hasUI: false });
+
+    pi.handlers.get("session_start")({}, ctx);
+    assert.equal(ctx.statuses.size, 0);
   });
 });
