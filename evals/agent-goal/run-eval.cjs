@@ -37,11 +37,12 @@ const WORK_DIR = path.join(ROOT, "work");
 const PROBE = path.join(ROOT, "probe.ts");
 const PAYLOAD_DIR = path.join(ROOT, "payloads");
 
-// Cheapest configured models first. `deepseek-v4-flash-0731-gmi-ray` is listed at
-// zero cost in models.json; the fallbacks are cents-per-megatoken.
+// The model the agent actually runs is the only one whose goal tracking is a
+// regression signal; the cheap flash models follow the guidelines less reliably
+// and flake on the mode choice, so they are fallbacks rather than the default.
 const MODELS = process.env.AG_EVAL_MODELS
   ? JSON.parse(process.env.AG_EVAL_MODELS)
-  : ["deepseek-v4-flash-0731-gmi-ray", "deepseek-v4-flash-0731"];
+  : ["trendmicro/gpt-6.1-sol", "deepseek-v4-flash-0731"];
 const BUDGET_USD = 5;
 const TURN_TIMEOUT_MS = 240000;
 

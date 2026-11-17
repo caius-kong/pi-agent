@@ -26,8 +26,9 @@
 ## 成本
 
 - **不主动调用模型**：扩展自身不发起任何模型请求。
-- **prompt 侧固定占用**：启用且有 UI 时，实测（本仓库当前版本，渲染后的 system prompt 文本）新增 **1315 字符**——`<rules>` 中 5 条 guideline 渲染后共 1225 字符（含 `- ` 前缀）+ `<tools>` 中 `- set_goal: <snippet>` 一行 90 字符。token 数取决于模型 tokenizer，这里不给承诺值；按 4 字符/token 粗估约 320 token（仅估算）。关闭或无 UI 时为 0。
-- **可能的 round trip**：guideline 要求把 `set_goal` 放进本轮第一个工具调用的同一响应里、**不要单独占一次响应**，并禁止只为刷新显示而多花一次往返。实测（真实 RPC 会话，4 轮多步任务）：模型仍会把它发成独立响应，每轮 1 次——这是该设计的**已知未达成项**，不是本扩展能自行消除的成本。
+- **prompt 侧固定占用**：启用且有 UI 时，实测（本仓库当前版本，渲染后的 system prompt 文本）新增 **1517 字符**——`<rules>` 中 5 条 guideline 渲染后共 1427 字符（含 `- ` 前缀）+ `<tools>` 中 `- set_goal: <snippet>` 一行 90 字符。token 数取决于模型 tokenizer，这里不给承诺值；按 4 字符/token 粗估约 320 token（仅估算）。关闭或无 UI 时为 0。
+- **调度成本（预期内）**：`set_goal` 由模型按需调度，若它独占一次响应就会多一次模型往返。guideline 要求把它放进本轮第一个工具调用的同一响应、不要单独占一次响应，并禁止只为刷新显示多花往返；实测（真实 RPC 会话，6 轮多步任务）`gpt-6.1-sol` 仍每轮发一次独立响应（6/6），这是可接受的调度成本。
+- **依赖模型遵循 guideline**：同一个 6 轮真实会话里，`deepseek-v4-flash-0731` 只在起点和 pivot 各声明一次，新增约束与同 outcome 延续都不调用，目标行因此变陈旧（仍停在起点）。显示层不做补偿性推断；换用遵循度低的模型时，目标追踪会变差。
 
 ## 配置
 
@@ -49,4 +50,5 @@
 | `index.ts` | 注册入口，含状态机、widget 渲染、`prepareLoadout` 可见性开关、`/agent-goal` 命令 |
 | `../../tests/agent-goal-state.test.mjs` | 状态机单测（mock ExtensionAPI） |
 | `../../tests/agent-goal-runtime.test.mjs` | 真实 `AgentSession` / `ExtensionRunner` 回归：不强制 system prompt、OFF/headless 可见性、同 run 内 OFF、其他工具不受影响、codemode `on`/`only` 不泄漏 |
-| `../../evals/agent-goal/run-eval.cjs` | 真实模型端到端 eval（RPC 模式断言 widget/status + 状态层） |
+| `../../evals/agent-goal/run-eval.cjs` | 真实模型端到端 eval：8 个脚本化场景，RPC 模式断言 widget/status + 状态层 + provider payload |
+| `../../evals/agent-goal/run-acceptance.cjs` | 真实会话验收：**不裁剪工具集**的 agent 真实干活，6 个场景断言目标追踪（start/新增约束/子问题/纯步骤/pivot/同 outcome 延续）+ OFF |

@@ -270,9 +270,9 @@ export default function agentGoal(pi: ExtensionAPI) {
     promptSnippet: "Show the user the outcome you are working toward (send with your first action)",
     promptGuidelines: [
       "set_goal shows the user the outcome you are working toward. Send it inside the same response as the first tool call you were going to make for the task — never as a response of its own — and again when the outcome really pivots; a simple one-shot answer needs no call. It never changes your instructions or what you do next.",
-      "Call set_goal mode:\"new\" only when you start an independent outcome — there is no current goal, or the user has moved to a different outcome. Continuing the same outcome is not a reason to call it, even right after a new user message; a separate new task inside the same repo still counts as an independent outcome.",
+      "Call set_goal mode:\"new\" only when you start an independent outcome — there is no current goal, or the user has moved to a different outcome. Continuing the same outcome is not a reason to call it, even right after a new user message; a separate new task inside the same repo still counts as an independent outcome. Never use mode:\"new\" for a step or a sub-problem of the outcome you already declared.",
       "Call set_goal mode:\"rewrite\" when the user adds a constraint to, or corrects, the outcome you already declared — for example \"also output the maximum\" for a script you already declared — and keep that outcome in the text. Use mode:\"new\" only when the pursued outcome itself changes.",
-      "Call set_goal mode:\"expand\" when a sub-problem worth showing becomes the current focus; the parent goal line stays unchanged and a later expand replaces the nested row.",
+      "Call set_goal mode:\"expand\" when the user turns to a part of the outcome you already declared — for example fixing a data row the script needs, or renaming variables inside it — and never mode:\"new\" for that: the parent goal line stays unchanged and only the nested focus row changes.",
       "Never spend an extra round trip or extra work only to refresh the display: if you have no other call to send, skip the update.",
     ],
     parameters: Type.Object({
