@@ -255,6 +255,8 @@ podman machine start hindsight
 podman ps                       # restart=unless-stopped 的容器应已自动拉起；没有则 podman-compose up -d
 ```
 
+`start` 报 `unable to connect to "gvproxy" socket` 时机器会显示 running，但 podman socket 拒连（`podman ps` → `connection refused`，`podman machine ssh` → `vm is not running`）。再执行一次 `podman machine stop` + `start` 即恢复；数据卷在 VM 磁盘内，不随 machine 重启丢失。
+
 ## 4. 验收清单
 
 - [ ] `/health` healthy 且 database connected；API/UI 只监听 loopback，无 host 端口外泄。
