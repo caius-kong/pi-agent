@@ -88,7 +88,6 @@ const { createFauxCore, fauxAssistantMessage, fauxToolCall, getCurrentSystemProm
 
 const EXT = path.join(__dirname, "..", "agent", "extensions", "agent-goal", "index.ts");
 const WIDGET_KEY = "agent-goal";
-const STATUS_KEY = "agent-status";
 
 // ── harness ───────────────────────────────────────────────────────────────
 
@@ -130,9 +129,9 @@ function widget(ui) {
   const entries = ui.filter((e) => e.method === "setWidget" && e.key === WIDGET_KEY);
   return entries.length > 0 ? entries[entries.length - 1].lines : undefined;
 }
-function status(ui) {
-  const entries = ui.filter((e) => e.method === "setStatus" && e.key === STATUS_KEY);
-  return entries.length > 0 ? entries[entries.length - 1].text : undefined;
+/** Every footer-status write the extension made (it must make none). */
+function statusWrites(ui) {
+  return ui.filter((e) => e.method === "setStatus");
 }
 
 /**
@@ -275,7 +274,7 @@ test("H2: ON — provider sees the set_goal declaration and its guidelines; widg
 
     const widgetLines = widget(h.ui);
     assert.ok(widgetLines && widgetLines.some((l) => l.includes("agent_goal: Ship CSV export")), `widget shows the goal: ${JSON.stringify(widgetLines)}`);
-    assert.match(String(status(h.ui)), /⛳/, "footer status shows the goal");
+    assert.deepEqual(statusWrites(h.ui), [], "the goal is not duplicated in the footer status line");
   } finally {
     h.dispose();
   }
@@ -283,7 +282,7 @@ test("H2: ON — provider sees the set_goal declaration and its guidelines; widg
 
 // ── H2: OFF ───────────────────────────────────────────────────────────────
 
-test("H2: OFF — declaration and guidelines disappear from the provider; widget/status cleared", async () => {
+test("H2: OFF — declaration and guidelines disappear from the provider; widget cleared", async () => {
   const h = await createHarness();
   try {
     await h.run([fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export", mode: "new" })]), fauxAssistantMessage("ok")], "Add CSV export.");
@@ -291,7 +290,6 @@ test("H2: OFF — declaration and guidelines disappear from the provider; widget
 
     await h.session.prompt("/agent-goal off");
     assert.equal(widget(h.ui), undefined, "OFF clears the widget");
-    assert.equal(status(h.ui), undefined, "OFF clears the footer status");
 
     await h.run([fauxAssistantMessage("ok")], "Keep going.");
     const view = h.request();

@@ -9,7 +9,6 @@
   },
   "packages": [
     "npm:pi-subagents",
-    "npm:@arvoretech/pi-slack-bridge",
     "npm:pi-web-access",
     "npm:@narumitw/pi-btw",
     "https://github.com/cathrynlavery/diagram-design",

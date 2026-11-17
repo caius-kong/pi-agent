@@ -23,9 +23,11 @@
  *                     name. Focus rows replace the previous nested row (do not stack).
  *
  * Both lines render in the same dim grey as pi's statusline — this is auxiliary
- * status info, not reading material. Zero extra LLM calls, zero timers, zero
- * loops, zero subagents. Fully independent from @narumitw/pi-goal (distinct
- * widget key, distinct status key, distinct tool name).
+ * status info, not reading material. The widget is the only surface: a footer
+ * copy would repeat the same goal text and, being variable-length, push the
+ * other extensions' footer switches out of the single status line.
+ * Zero extra LLM calls, zero timers, zero loops, zero subagents. Fully
+ * independent from @narumitw/pi-goal (distinct widget key, distinct tool name).
  *
  * Visibility is a loadout concern, not a state-machine concern: `set_goal` is
  * `exposure: "model-only"` (never callable from another tool, so codemode cannot
@@ -35,8 +37,7 @@
  * The tool stays active, so toggling never rebuilds the active set and cannot
  * drop tools that are still waiting to register.
  *
- * Widget key : "agent-goal"   (above editor)
- * Status key : "agent-status" (footer, single dim line when a goal is set)
+ * Widget key : "agent-goal"   (above editor; the only display surface)
  * Tool       : set_goal       (session-scoped, persist via appendEntry)
  */
 
@@ -45,17 +46,14 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { truncateToWidth } from "@earendil-works/pi-tui";
 
 // ─── constants ────────────────────────────────────────────────────────────
 
 const WIDGET_KEY = "agent-goal";
-const STATUS_KEY = "agent-status";
 const STATE_ENTRY_TYPE = "agent-goal-state";
 const TOOL_NAME = "set_goal";
 const GOAL_MAX_LEN = 120; // the goal line's length budget, stated in the parameter docs
 const PROMPT_MAX_LEN = 400;
-const STATUS_MAX_LEN = 60; // footer line width budget (shared with other exts)
 
 // ─── state ────────────────────────────────────────────────────────────────
 
@@ -198,23 +196,10 @@ export default function agentGoal(pi: ExtensionAPI) {
 
     if (lines.length === 0) {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
-      ctx.ui.setStatus(STATUS_KEY, undefined);
       return;
     }
 
     ctx.ui.setWidget(WIDGET_KEY, lines);
-
-    // Footer: single dim goal line only (auxiliary, shares the strip with
-    // goal/voice/slack/system-prompt statuses). No prompt here — rendering a
-    // 400-char prompt as "⛳ fix the auth middlewa…" is noise.
-    if (state.goal) {
-      ctx.ui.setStatus(
-        STATUS_KEY,
-        theme.fg("dim", `⛳ ${truncateToWidth(state.goal, STATUS_MAX_LEN)}`),
-      );
-    } else {
-      ctx.ui.setStatus(STATUS_KEY, undefined);
-    }
   }
 
   // ─── events ─────────────────────────────────────────────────────────────
@@ -348,7 +333,6 @@ export default function agentGoal(pi: ExtensionAPI) {
         enabled = false;
         refreshLoadout();
         ctx.ui.setWidget(WIDGET_KEY, undefined);
-        ctx.ui.setStatus(STATUS_KEY, undefined);
         ctx.ui.notify("agent-goal: OFF", "warning");
         return;
       }

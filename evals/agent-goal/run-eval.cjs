@@ -3,8 +3,9 @@
  * agent-goal eval — end-to-end behavior of the display layer on a REAL model.
  *
  * Two layers are asserted for every scenario:
- *   1. DISPLAY — `extension_ui_request` records (`setWidget` for key "agent-goal",
- *      `setStatus` for key "agent-status") as Pi actually emits them to a client.
+ *   1. DISPLAY — `extension_ui_request` records (`setWidget` for key "agent-goal";
+ *      the extension must not write the footer status line at all) as Pi
+ *      actually emits them to a client.
  *   2. STATE   — the session JSONL: the `set_goal` call sequence and the last
  *      `agent-goal-state` custom entry.
  *
@@ -140,6 +141,10 @@ function summarizeState(scenarioId) {
  */
 function assertModelUsable(state) {
   if (state.modelErrors.length > 0) throw new Error(`model error: ${state.modelErrors[0]}`);
+  // A turn that produced no provider response at all is a failed run, not a
+  // scenario result: reporting it as an assertion failure hides a transient
+  // (rate limit, dropped connection) behind a red goal-tracking check.
+  if (state.providerResponses === 0) throw new Error("no provider response (transient)");
 }
 
 function readPayloads(scenarioId) {
@@ -181,10 +186,10 @@ function widgetStates(records) {
     .filter((r) => r.type === "extension_ui_request" && r.method === "setWidget" && r.widgetKey === "agent-goal")
     .map((r) => stripAnsiDeep(r.widgetLines));
 }
-function statusStates(records) {
-  return records
-    .filter((r) => r.type === "extension_ui_request" && r.method === "setStatus" && r.statusKey === "agent-status")
-    .map((r) => (r.statusText === undefined ? undefined : cleanText(r.statusText)));
+function footerStatusWrites(records) {
+  return records.filter(
+    (r) => r.type === "extension_ui_request" && r.method === "setStatus" && r.statusKey === "agent-status",
+  );
 }
 const lastOf = (list) => (list.length ? list[list.length - 1] : undefined);
 
@@ -321,15 +326,13 @@ const scenarios = [
     check({ records, state }) {
       let ok = true;
       const widgets = widgetStates(records);
-      const statuses = statusStates(records);
       const goalLine = widgets.flat().filter((l) => typeof l === "string").find((l) => l.startsWith("agent_goal:"));
       ok = (goalLine && /csv|export/i.test(goalLine)
         ? PASS(`display: agent_goal line "${goalLine.slice(0, 60)}"`)
         : FAIL(`display: agent_goal line for the new outcome (got ${JSON.stringify(widgets.slice(-1))})`)) && ok;
-      const footer = statuses.filter(Boolean).pop();
-      ok = (footer && footer.includes("⛳")
-        ? PASS(`display: footer status "${footer.slice(0, 40)}"`)
-        : FAIL(`display: footer status with ⛳ (got ${JSON.stringify(statuses)})`)) && ok;
+      ok = (footerStatusWrites(records).length === 0
+        ? PASS("display: footer status line untouched (the widget is the only surface)")
+        : FAIL(`display: no agent-status footer writes (got ${JSON.stringify(footerStatusWrites(records))})`)) && ok;
       const first = state.goalCalls[0];
       ok = (first && first.mode === "new"
         ? PASS(`state: first set_goal uses mode:"new"`)
@@ -460,23 +463,14 @@ const scenarios = [
     check({ records, turnPayloads }) {
       let ok = true;
       const widgets = widgetStates(records);
-      const statuses = statusStates(records);
       const offIndex = widgets.findIndex((lines) => lines === undefined);
       ok = (offIndex !== -1
         ? PASS("display: /agent-goal off cleared the widget")
         : FAIL(`display: /agent-goal off cleared the widget (got ${JSON.stringify(widgets)})`)) && ok;
-      const clearedStatus = statuses.findIndex((text) => text === undefined);
-      ok = (clearedStatus !== -1
-        ? PASS("display: /agent-goal off cleared the footer status")
-        : FAIL(`display: /agent-goal off cleared the footer status (got ${JSON.stringify(statuses)})`)) && ok;
       const lastWidget = lastOf(widgets);
       ok = (lastWidget && lastWidget.some((l) => String(l).startsWith("agent_goal:"))
         ? PASS(`display: /agent-goal on restored "${lastWidget.find((l) => String(l).startsWith("agent_goal:")).slice(0, 50)}"`)
         : FAIL(`display: /agent-goal on restored the goal line (got ${JSON.stringify(lastWidget)})`)) && ok;
-      const lastStatus = lastOf(statuses);
-      ok = (lastStatus && lastStatus.includes("⛳")
-        ? PASS("display: /agent-goal on restored the footer status")
-        : FAIL(`display: /agent-goal on restored the footer status (got ${JSON.stringify(lastStatus)})`)) && ok;
       // The turn that ran while OFF must not have shown the tool to the provider.
       const offPayloads = turnPayloads[2] ?? [];
       ok = (offPayloads.length > 0 && offPayloads.every((p) => !payloadMentionsSetGoal(p))
@@ -608,13 +602,15 @@ async function main() {
     let result = null;
     let modelUsed = MODELS_TO_RUN[0];
     for (const model of MODELS_TO_RUN) {
-      try {
-        result = sc.headless ? runHeadlessScenario(sc, model) : await runRpcScenario(sc, model);
-        modelUsed = model;
-        break;
-      } catch (e) {
-        console.error(`  [${model}] ${String(e.message || e).split("\n")[0]}`);
+      for (let attempt = 1; attempt <= 2 && !result; attempt++) {
+        try {
+          result = sc.headless ? runHeadlessScenario(sc, model) : await runRpcScenario(sc, model);
+          modelUsed = model;
+        } catch (e) {
+          console.error(`  [${model}${attempt > 1 ? ` attempt ${attempt}` : ""}] ${String(e.message || e).split("\n")[0]}`);
+        }
       }
+      if (result) break;
     }
     if (!result) {
       console.log("  ✗ scenario could not run on any configured model");
@@ -642,7 +638,7 @@ async function main() {
       responses: result.state.providerResponses,
       display: {
         widget: lastOf(widgetStates(result.records)) ?? null,
-        status: lastOf(statusStates(result.records)) ?? null,
+        footerStatusWrites: footerStatusWrites(result.records).length,
         payloads: result.payloads.length,
       },
       calls: result.state.goalCalls,
@@ -660,7 +656,7 @@ async function main() {
     console.log(`  ${row.ok ? "PASS" : "FAIL"} ${row.id} · ${row.model} · ${row.responses} response(s) · $${row.costUsd.toFixed(4)}`);
     if (row.display) {
       console.log(`       widget: ${JSON.stringify(row.display.widget)}`);
-      console.log(`       status: ${JSON.stringify(row.display.status)}`);
+      console.log(`       footer status writes: ${row.display.footerStatusWrites}`);
       console.log(`       set_goal calls: ${JSON.stringify(row.calls)}`);
     }
   }

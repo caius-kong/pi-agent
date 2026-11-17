@@ -9,7 +9,7 @@
 ## 行为
 
 1. **指令只有一处** — 全部写在 `set_goal` 工具的 `promptGuidelines` 里（外加一行 `promptSnippet` 和 `description`）。本扩展**不返回 `systemPrompt`、不设 `forceSystemPrompt`、不写 `sections[...]`**，所以不会顶掉其他扩展对结构化 prompt 的修改。
-2. **显示** — widget 两行灰字 `user_prompt` / `agent_goal` + footer 单行 `⛳`。无 timer、无循环、无后台任务、无子代理，纯事件驱动。
+2. **显示** — widget 两行灰字 `user_prompt` / `agent_goal`。footer 不写状态行：同一句目标若再占 footer，会挤掉其他扩展的开关（footer 状态只有一行、按 key 排序、超宽从尾部截断）。无 timer、无循环、无后台任务、无子代理，纯事件驱动。
 3. **持久化** — session entry（`agent-goal-state`，JSONL），随 session 走而非全局文件（与 pi-goal 相同模式）。
 4. **切换 branch** — `session_tree` 时先清空本地状态再从**当前分支**重读；切到没有目标条目的 branch 就显示空，不沿用上一条 branch 的残留（`getEntries()` 含全部 branch，所以只扫 `getBranch()`）。
 
@@ -41,7 +41,7 @@
 | 角色 | 纯显示层 | 长任务自主执行系统 |
 | 目标来源 | LLM 自愿调用 `set_goal` | 每轮注入固定 objective |
 | 熔断/控制 | 无 | 有（自动推进 + 熔断） |
-| 冲突 | 不冲突，widget/status/tool key 均独立 | — |
+| 冲突 | 不冲突，widget/tool key 均独立 | — |
 
 ## 实现
 
@@ -50,5 +50,5 @@
 | `index.ts` | 注册入口，含状态机、widget 渲染、`prepareLoadout` 可见性开关、`/agent-goal` 命令 |
 | `../../tests/agent-goal-state.test.mjs` | 状态机单测（mock ExtensionAPI） |
 | `../../tests/agent-goal-runtime.test.mjs` | 真实 `AgentSession` / `ExtensionRunner` 回归：不强制 system prompt、OFF/headless 可见性、同 run 内 OFF、其他工具不受影响、codemode `on`/`only` 不泄漏 |
-| `../../evals/agent-goal/run-eval.cjs` | 真实模型端到端 eval：8 个脚本化场景，RPC 模式断言 widget/status + 状态层 + provider payload |
+| `../../evals/agent-goal/run-eval.cjs` | 真实模型端到端 eval：8 个脚本化场景，RPC 模式断言 widget + footer 无状态写入 + 状态层 + provider payload |
 | `../../evals/agent-goal/run-acceptance.cjs` | 真实会话验收：**不裁剪工具集**的 agent 真实干活，6 个场景断言目标追踪（start/新增约束/子问题/纯步骤/pivot/同 outcome 延续）+ OFF |
