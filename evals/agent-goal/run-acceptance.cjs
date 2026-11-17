@@ -66,7 +66,7 @@ const proc = spawn("pi", [
   "-e", EXT,
   "-e", PROBE,
   "--approve",
-  "--thinking", "low",
+  "--thinking", process.env.ACC_THINKING || "low",
   "--model", MODEL,
 ], {
   cwd: WORK,
