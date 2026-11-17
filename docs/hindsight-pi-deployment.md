@@ -102,28 +102,39 @@ HINDSIGHT_API_TOKEN=<tenant key> ./bootstrap.sh \
 | `autoInject` | `reflect` | `reflect` | 官方默认，首轮注入质量最高；改 `pages`/`recall` 会退回检索或摘要，见 §1.2 |
 | `reflectTimeoutMs` | `20000` | `240000` | 必须覆盖实测 p90（luna reflect 中位 30s、p90 可达 150s）；Pi 的 hook 已无超时，该值只受服务端 `REFLECT_WALL_TIMEOUT` 约束 |
 | `injectTimeoutMs` | `7000` | 不改 | `pages` / `recall` 是纯检索，实测 0.1–7s |
-| `optInOnly` / `optInPaths` | `false` / 空 | `true` / 白名单 | 见 §2.1 |
+| `optInOnly` / `optInPaths` | `false` / 空 | `true` / `["~"]` | 见 §2.1 |
+| `banks` | — | `coding-agent::caius_kong` 关闭 | home 自身不是项目，见 §2.1 |
 
 改完**重启 Pi** 才生效（persistent plugin 只在加载 workspace 时读配置）。
 
-### 2.1 bank 白名单（必做，必须按本机环境定制）
-
-**不开白名单就会污染 bank 列表**：默认每个工作目录都开一个 bank，`/tmp` 跑一次 e2e、`~/Downloads` 解个包、随手 clone 的临时仓库都会留下一个永久的空 bank。这类垃圾 bank 无法用名字区分，清理时要逐个看 `total_nodes` 才能判断能不能删。
+### 2.1 启用范围：一条 home 前缀 + 按 bank 关停
 
 ```jsonc
 {
   "optInOnly": true,
-  "optInPaths": ["<你真正会跑 agent 的根目录>", ...]
+  "optInPaths": ["~"],
+  "banks": { "coding-agent::caius_kong": { "disabled": true } }
 }
 ```
 
-`optInOnly: true` 表示**只有列出的路径前缀下的项目才创建 bank，其余目录完全惰性**（不连服务端、不写入）。`optInPaths` 是前缀匹配，其下每个 repo 仍各有自己的 bank。
+**为什么是一条宽前缀而不是逐条白名单。** `optInPaths` 是前缀匹配，其下每个 repo 仍各得一个 `coding-agent::{gitProject}` bank——前缀只决定“哪些目录被允许”，不改变 bank 粒度。官方默认本来就是 `optInOnly: false`（每个项目都有记忆），`["~"]` 是它的严格子集，不是反模式。而逐条列举有两种失效方式，且**失败方向相反**：
 
-**这份列表取决于本机环境，没有通用答案。** 填之前先想清楚：哪些目录里你真的会启动 agent 并希望它记住上下文？典型的候选是配置文件仓库、自有 skill/代码仓库的父目录；典型的不该加入：`/tmp`、`~/Downloads`、`~/Desktop`、只读参考用的第三方 clone。
+| 方向 | 漏掉的后果 | 可见性 |
+|---|---|---|
+| 白名单（opt-in）漏一条 | 那个 repo 从此**不记任何记忆** | 静默，下次用才发现 |
+| 黑名单（opt-out）漏一条 | 多出一个 bank | 可见，`GET /v1/default/banks` 就能看到并删 |
 
-**`mapPathToBank` 慎用。** 它把子目录强制写进另一个 bank，适合“monorepo 里的子包属于父项目”这类场景。不要用它把**第三方只读项目**映射进自己的项目 bank：那个目录里的一次问答会被写进你的项目记忆，以后 recall 会召回别人的代码细节，且 hindsight 没有 bank 内的来源过滤手段。宁可给它一个独立 bank，或者干脆不 opt-in。
+所以默认宽启用、用黑名单收口。`/tmp`、`/var/folders`、`/Volumes` 都在 home 之外，天然惰性；`~/Downloads`、`~/Desktop` 只有在里面真跑 agent 时才会建 bank，且建了也只是一个可删的 bank。
 
-改完要**重启 Pi** 才生效（persistent plugin 只在加载 workspace 时读配置）。清理已有垃圾 bank：先看 `GET /v1/default/banks/{id}/stats` 的 `total_nodes`，再 `DELETE /v1/default/banks/{id}`。
+**低价值 bank 用 `banks.<bankId>.disabled` 关掉，不要靠收窄 `optInPaths` 去规避。** 本机 home 自身不是项目，但 `cwd=~` 的 session（包括在 home 里起的 agent）会解析出 `coding-agent::caius_kong`；`disabled` 按**已解析的 bank id** 匹配，抑制 session-start（连带抑制 `autoSeed` 与 `codebaseSurvey`）、injection、retain 和记忆工具，且不随目录移动失效。同样的手段适用于：在 home 内跑过一次、事后确认无价值的任何 bank。
+
+**`paths.<prefix>.disabled` 是 opt-in 之后才生效的补充开关**，用于“宽前缀已批准、但这一棵子树要关掉”的场景（例如某次实测要在 home 内临时关掉某个目录）。它不能替代 `optInPaths` 做覆盖管理。
+
+**第三方只读 clone 留在宽前缀里是可以接受的**：它们拿到的是**自己名字的独立 bank**（`coding-agent::{repo}`），不会污染你的项目 bank，代价只是 bank 列表里多一行。真嫌吵就对那个 bank id 加 `disabled`。真正的污染风险在 `mapPathToBank`——它把子目录**写进另一个 bank**，一次问答就进了你的项目记忆，且 hindsight 没有 bank 内的来源过滤手段。**不要用 `mapPathToBank` 把第三方项目并进自己的 bank。**
+
+**不设 `defaultBankConfig`。** 官方用它给新 bank 定统一基线（`enable_observations: false` / `enable_auto_consolidation: false`），但关掉 observations 会让默认 `recallOptions`（`types: ["observation"]`）在新 bank 上**恒为空**，而 observations 正是每 token 信息量最高的那层。且 `pageTriggerType: "cron"` 下刷新是“先判脏再刷”，成本随写入量而非 bank 数增长，冷 bank 几乎零成本——没有省钱的必要。
+
+改完要**重启 Pi** 才生效（persistent plugin 只在加载 workspace 时读配置）。盘点与清理：`GET /v1/default/banks` 列 id，`GET /v1/default/banks/{id}/stats` 看 `total_nodes` / `last_memory_write_at`，删除用 `DELETE /v1/default/banks/{id}`（不可恢复；控制台批量删除是串行执行的，不要并发）。
 
 ### 2.2 运行时补丁：探测到才打
 
@@ -232,7 +243,7 @@ curl -sX POST -H "Authorization: Bearer $TENANT_KEY" -H 'Content-Type: applicati
 - [ ] 调度日志无 `paused after a failed refresh`；各页 `last_refresh_failed_at` 为空。
 - [ ] 容器 env 里 `HINDSIGHT_API_LLM_MODEL` / `HINDSIGHT_API_REFLECT_LLM_MODEL` / `HINDSIGHT_API_RERANKER_MAX_CANDIDATES` / `HINDSIGHT_VERSION` 与 §1.1 一致。
 - [ ] client `hindsight_diagnose` 通过；`coding-agent.json` 为 `0600`，`reflectTimeoutMs` 与实测 p90 对齐。
-- [ ] `optInOnly: true` 且 `optInPaths` 已按本机环境定制（§2.1）；`/tmp` 下启动 agent 不产生新 bank。
+- [ ] `optInOnly: true` 且 `optInPaths: ["~"]`，home 自身 bank 已 `disabled`（§2.1）；`/tmp` 下启动 agent 不产生新 bank，而 `/tmp` 下 home repo 的 linked worktree 落到 main repo 的 bank。
 - [ ] LLM key 的 `exp` 已记录并在到期前安排轮换；`POST /health/llm` 三个 operation 均 `connected`。
 - [ ] 重启（VM + 主机）后 API 自动恢复；secret 未进 Git/日志/命令行。
 
