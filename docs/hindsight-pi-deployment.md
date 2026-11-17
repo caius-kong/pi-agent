@@ -12,7 +12,7 @@
 
 官方：[Installation](https://hindsight.vectorize.io/developer/installation) · [Configuration](https://hindsight.vectorize.io/developer/configuration) · [external-pg compose](https://github.com/vectorize-io/hindsight/blob/main/docker/docker-compose/external-pg/docker-compose.yaml)。Quick Start 的 `docker run` + 内嵌 pg0 只适合试跑。
 
-1. 资源：给容器 ≥4 vCPU / ≥6 GB（full 镜像加载本地 embedding + reranker）。macOS 用 Podman：`podman machine init --cpus 4 --memory 6144 hindsight && podman machine start hindsight`（登录后自启见 [Podman macOS autostart](https://github.com/containers/podman/blob/main/docs/tutorials/macos_autostart.md)）。
+1. 资源：VM **≥8 GiB** / ≥4 vCPU，并在扣除 PG 后给 API 留 ≥2 GB 余量。API 进程稳态 RSS 3.4–4.2 GB（ONNX embedding + flashrank + MCP 与控制台 UI 同容器），PG 另占 ~0.6 GB；VM 无 swap，余量不足时突发（consolidation / reflect / 页面刷新）会被内核 OOM kill，症状是 502 抖动而不是报错（§3.5）。macOS 用 Podman：`podman machine init --cpus 4 --memory 8192 hindsight && podman machine start hindsight`（登录后自启见 [Podman macOS autostart](https://github.com/containers/podman/blob/main/docs/tutorials/macos_autostart.md)）。宿主机在扣除 VM 占用后仍须够日常使用——macOS 默认无 swap。
 2. 取官方 external-pg compose 到部署机的 `~/.config/hindsight-podman/compose.yaml`，按 §1.1 逐条修改，**其余保持官方原样**。
 3. `~/.config/hindsight-podman/.env`（目录 `0700`、文件 `0600`）：
    ```dotenv
@@ -53,7 +53,7 @@
 | `db.healthcheck` | 无 | `pg_isready` + `depends_on: service_healthy` | 让 API 等 DB 就绪，不靠 sleep |
 | `LLM_MODEL` | `gpt-5-mini`（默认） | `gpt-6-luna` | 见 §1.2：默认值在本 gateway 上不可用 |
 | `LLM_REASONING_EFFORT` | 未设 | `low` | 见 §1.2 |
-| `REFLECT_LLM_MODEL` / `MENTAL_MODEL_REFRESH_LLM_MODEL` | 回退 `LLM_MODEL` | `gpt-6-luna` | `gpt-oss-20b` 的 done-tool 会返回空 answer（实测 8 次中 3 次 `Reflect's done tool returned no answer`，成功率 62.5%）；`gpt-6-luna` 实测 10/10 成功 |
+| `REFLECT_LLM_MODEL` / `MENTAL_MODEL_REFRESH_LLM_MODEL` | 回退 `LLM_MODEL` | `gpt-6-luna` | `gpt-oss-20b` 的 done-tool 会返回空 answer（`Reflect's done tool returned no answer`）；`gpt-6-luna` 无此问题 |
 | `REFLECT_LLM_TIMEOUT` | `30` | `120` | reflect 用 luna 后单次调用可达 60–90s（reflect 总时长 median 30s、p90 150s+） |
 | `LLM_PROVIDER` | `openai`（默认） | `openai` | 不改；本 gateway 是 OpenAI 兼容 endpoint |
 | `LLM_BASE_URL` | 官方默认指向官方云 | `<自建 gateway>` | 本机用内部 endpoint；必须含 `/v1/` 后缀 |
@@ -64,7 +64,7 @@
 | `MENTAL_MODEL_DELTA_USE_DECISION_MODEL` | 跟随 `REFLECT_USE_DECISION_MODEL` | `true` | 知识页 delta 刷新也走 decision model，与 reflect 保持一致 |
 | `RECALL_DECISION_MODEL_PROVIDER` | 跟随全局 | `none` | 否则每次检索都改走 decision model，丢掉 reranker |
 | `RERANKER_PROVIDER` | `local` | `flashrank` | 纯 CPU 机器官方推荐 |
-| `RERANKER_MAX_CANDIDATES` | `300` | `100` | 官方 Performance 页称 300→100 是纯 CPU 上最大单笔收益；实测 recall 18.5s→5-6s |
+| `RERANKER_MAX_CANDIDATES` | `300` | `100` | 官方 Performance 页称 300→100 是纯 CPU 上最大单笔收益；本机 recall 5–6s |
 | `ENABLE_BANK_LLM_HEALTH` | `false` | `true` | 仅开启 `POST /health/llm` 端点；代码里没有启动时或定期的自动探测，不调用就不产生 cost。用于在 LLM key 过期前主动发现，见 §3.4 |
 | `EMBEDDINGS_PROVIDER` | `local` | `onnx` | 同一 bge-small 模型，不拉 PyTorch |
 | `WORKER_ID` | hostname（容器里 = 容器 ID，重启即变） | 每实例唯一固定值 | 官方安装指引推荐 |
@@ -76,7 +76,7 @@
 
 - **`shm_size` 必须手写**：官方 compose 模板没有该字段，照抄即 64MB，故障是静默丢写入而不是报错。
 - **推理模型必须钉 `reasoning_effort`**：不设时 reasoning 会吃光 completion 预算，strict-schema 调用返回**空 `content`**（日志 `Provider returned empty message content`），表现为 retain/consolidation 失败、observations 停产、知识页饿死。`gpt-oss-20b` 只接受 `low`（`none`/`minimal` 被上游 Bedrock 拒，`medium` 一次 62s），且即使 `low` 在 consolidation 的多事实批处理上仍会回空 → **它不能用于 consolidation**。当前 retain/consolidation 与 reflect 都用 `gpt-6-luna`（同样钉 `low`），日志里 consolidation 单批 10–25s。
-- **reflect 不能用 `gpt-oss-20b`**：它的 done-tool 调用会带空 arguments（`Reflect's done tool returned no answer (iteration N, 3 tool call(s) made): ... finish_reason=tool_calls, argument keys: []`），实测成功率仅 62.5%，表现为约 1/3 的会话在首轮注入时静默降级到 pages。换成 `gpt-6-luna` 后 10/10 成功，代价是 reflect 总时长从 median 63s 升到 median 30–80s、p90 可达 150s。
+- **reflect 不能用 `gpt-oss-20b`**：它的 done-tool 调用会带空 arguments（`Reflect's done tool returned no answer (iteration N, 3 tool call(s) made): ... finish_reason=tool_calls, argument keys: []`），表现为部分会话在首轮注入时静默降级到 pages。`gpt-6-luna` 无此问题，代价是 reflect 总时长 median 30–80s、p90 可达 150s。
 - **客户端 `reflectTimeoutMs` 必须与实测 p90 对齐**：Pi 的 hook 已无超时（`hookTimeout` 已移除，仅 Ctrl+C 中止），所以该值只受服务端 `REFLECT_WALL_TIMEOUT` 约束；当前设 240s 覆盖 p90。
 - **`REFLECT_WALL_TIMEOUT` 同时是刷新上限**：默认 300s 会把长刷新砍掉，而一次失败就会让该页暂停自动刷新，直到显式刷新成功（§3.3）。
 - **decision model 是实验特性**：开启后 recall 默认也改走它，要用 `RECALL_DECISION_MODEL_PROVIDER=none` 保留 reranker。
@@ -117,7 +117,7 @@ HINDSIGHT_API_TOKEN=<tenant key> ./bootstrap.sh \
 }
 ```
 
-**为什么是一条宽前缀而不是逐条白名单。** `optInPaths` 是前缀匹配，其下每个 repo 仍各得一个 `coding-agent::{gitProject}` bank——前缀只决定“哪些目录被允许”，不改变 bank 粒度。官方默认本来就是 `optInOnly: false`（每个项目都有记忆），`["~"]` 是它的严格子集，不是反模式。而逐条列举有两种失效方式，且**失败方向相反**：
+**前缀只决定“哪些目录被允许”，不改变 bank 粒度**：其下每个 repo 仍各得一个 `coding-agent::{gitProject}` bank，所以只需回答“哪些目录里会有 agent 跑”。官方默认是 `optInOnly: false`（每个项目都有记忆），`["~"]` 是它的严格子集。而逐条列举的两种失效方向不对称：
 
 | 方向 | 漏掉的后果 | 可见性 |
 |---|---|---|
@@ -128,7 +128,7 @@ HINDSIGHT_API_TOKEN=<tenant key> ./bootstrap.sh \
 
 **低价值 bank 用 `banks.<bankId>.disabled` 关掉，不要靠收窄 `optInPaths` 去规避。** 本机 home 自身不是项目，但 `cwd=~` 的 session（包括在 home 里起的 agent）会解析出 `coding-agent::caius_kong`；`disabled` 按**已解析的 bank id** 匹配，抑制 session-start（连带抑制 `autoSeed` 与 `codebaseSurvey`）、injection、retain 和记忆工具，且不随目录移动失效。同样的手段适用于：在 home 内跑过一次、事后确认无价值的任何 bank。
 
-**`paths.<prefix>.disabled` 是 opt-in 之后才生效的补充开关**，用于“宽前缀已批准、但这一棵子树要关掉”的场景（例如某次实测要在 home 内临时关掉某个目录）。它不能替代 `optInPaths` 做覆盖管理。
+**`paths.<prefix>.disabled` 是 opt-in 之后才生效的补充开关**，用于“宽前缀已批准、但这一棵子树要关掉”的场景（例如临时关掉 home 内某个目录）。它不能替代 `optInPaths` 做覆盖管理。
 
 **第三方只读 clone 留在宽前缀里是可以接受的**：它们拿到的是**自己名字的独立 bank**（`coding-agent::{repo}`），不会污染你的项目 bank，代价只是 bank 列表里多一行。真嫌吵就对那个 bank id 加 `disabled`。真正的污染风险在 `mapPathToBank`——它把子目录**写进另一个 bank**，一次问答就进了你的项目记忆，且 hindsight 没有 bank 内的来源过滤手段。**不要用 `mapPathToBank` 把第三方项目并进自己的 bank。**
 
@@ -232,6 +232,29 @@ curl -sX POST -H "Authorization: Bearer $TENANT_KEY" -H 'Content-Type: applicati
 
 **换 key**：改 `.env` 的 `HINDSIGHT_API_LLM_API_KEY` 后必须 `podman-compose up -d` 重建容器，**只改 env 不重建不生效**。换完跑一次上面的探测，再查 `GET /v1/default/banks/<bank>/operations?status=failed` 是否归零。
 
+### 3.5 502 抖动 / 容器反复重启：先查 OOM
+
+**症状**：客户端 `/health` 与 `recall` 间歇 502、重试能过，而 `retain` 和 `DELETE` 仍成功。应用日志里找不到对应的 5xx——请求根本没到达应用。
+
+**判据**（三条一起看）：
+
+```bash
+podman inspect hindsight-app --format '{{.State.Status}} restarts={{.RestartCount}} oom={{.State.OOMKilled}}'
+podman events --stream=false --since 24h --filter event=died --format '{{.Time}} {{.Name}}' | wc -l
+podman machine ssh free -m          # 看 available 与 Swap 行
+```
+
+`oom=true` 或 `restarts` 持续增长就是内核 OOM kill：容器 exit code 0、日志无 traceback，因为被 SIGKILL 的是进程本身。VM 无 swap，余量不足时内核挑最大的进程杀，通常正是 API。
+
+**处置**：抬高 VM 内存，宿主机不够就换机器——Podman 的 applehv VM 不提供 swap 配置，加 swap 不是选项。
+
+```bash
+podman machine stop hindsight
+podman machine set --memory 8192 hindsight
+podman machine start hindsight
+podman ps                       # restart=unless-stopped 的容器应已自动拉起；没有则 podman-compose up -d
+```
+
 ## 4. 验收清单
 
 - [ ] `/health` healthy 且 database connected；API/UI 只监听 loopback，无 host 端口外泄。
@@ -239,7 +262,8 @@ curl -sX POST -H "Authorization: Bearer $TENANT_KEY" -H 'Content-Type: applicati
 - [ ] `podman inspect hindsight-db --format '{{.HostConfig.ShmSize}}'` = `1073741824`。
 - [ ] 连续 retain 无 `could not resize shared memory segment`、无 `Provider returned empty message content`。
 - [ ] 一次真实 retain + recall 正常（recall ≤ 7s）；一次 `hindsight_reflect` 返回非空 `text` 且耗时 ≤ `reflectTimeoutMs`。
-- [ ] `reflect` 连续 5 次无 `Reflect's done tool returned no answer`（用 `gpt-oss-20b` 时实测约 1/3 会命中）。
+- [ ] `reflect` 连续 5 次无 `Reflect's done tool returned no answer`。
+- [ ] `podman inspect hindsight-app --format '{{.State.OOMKilled}} {{.RestartCount}}'` 为 `false` 且 restarts 不增长；`podman machine ssh free -m` 的 available ≥ 1.5 GB（§3.5）。
 - [ ] 调度日志无 `paused after a failed refresh`；各页 `last_refresh_failed_at` 为空。
 - [ ] 容器 env 里 `HINDSIGHT_API_LLM_MODEL` / `HINDSIGHT_API_REFLECT_LLM_MODEL` / `HINDSIGHT_API_RERANKER_MAX_CANDIDATES` / `HINDSIGHT_VERSION` 与 §1.1 一致。
 - [ ] client `hindsight_diagnose` 通过；`coding-agent.json` 为 `0600`，`reflectTimeoutMs` 与实测 p90 对齐。
