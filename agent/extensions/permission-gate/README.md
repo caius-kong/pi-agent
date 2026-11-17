@@ -39,7 +39,7 @@
 
 ### 状态栏指示
 
-YOLO 生效时 footer 显示 `yolo: on`（warning 色），未生效时什么都不显示（缺失即 off）。来源是 settings 开关或本会话 arming。状态 key 为 `agent-yolo`：pi 按 key 字母序拼接 footer 状态，该 key 落在 `agent-status` 与 `auto-agent-loop` 之间。
+YOLO 生效时 footer 显示 `yolo: on`（warning 色），未生效时什么都不显示（缺失即 off）。来源是 settings 开关或本会话 arming。状态 key 为 `agent-yolo`：pi 按 key 字母序拼接 footer 状态，该 key 正好排在 `auto-agent-loop` 之前。
 
 ### 持久化 allowlist
 

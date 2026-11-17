@@ -42,8 +42,8 @@
  *
  * The footer carries the switch as "yolo: on" while the gate is disarmed,
  * and nothing at all while it is armed (absence already means off).  The
- * status key is "agent-yolo" because pi sorts footer statuses by key:
- * agent-status < agent-yolo < auto-agent-loop.
+ * status key is "agent-yolo" because pi sorts footer statuses by key and
+ * this key sorts just before "auto-agent-loop".
  *
  * Only the settings switch persists.  Dialog/command YOLO is in-memory and
  * session-scoped: it expires when the pi process exits, and applies only to
@@ -278,8 +278,8 @@ function yoloActive(ctxCwd: string): boolean {
   return ctxCwd === yoloCwd || ctxCwd.startsWith(yoloCwd.replace(/\/+$/, "") + "/");
 }
 
-// Footer switch.  "agent-yolo" sorts between "agent-status" and
-// "auto-agent-loop", which is the order we want on the single status line.
+// Footer switch.  "agent-yolo" sorts just before "auto-agent-loop", which is
+// the order we want on the single status line.
 const STATUS_KEY = "agent-yolo";
 
 function showStatus(ctx: {

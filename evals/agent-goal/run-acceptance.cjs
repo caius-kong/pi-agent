@@ -137,9 +137,8 @@ const TURNS = [
 const widgets = () => records
   .filter((r) => r.type === "extension_ui_request" && r.method === "setWidget" && r.widgetKey === "agent-goal")
   .map((r) => cleanDeep(r.widgetLines));
-const statuses = () => records
-  .filter((r) => r.type === "extension_ui_request" && r.method === "setStatus" && r.statusKey === "agent-status")
-  .map((r) => (r.statusText === undefined ? undefined : clean(r.statusText)));
+const footerStatusWrites = () => records
+  .filter((r) => r.type === "extension_ui_request" && r.method === "setStatus" && r.statusKey === "agent-status");
 
 function readSession() {
   let files = [];
@@ -234,11 +233,10 @@ function statusOnlyTurns() {
     const all = widgets().filter(Boolean);
     const goalRenders = all.flat().filter((l) => typeof l === "string" && l.startsWith("agent_goal:"));
     const nestedRenders = all.flat().filter((l) => typeof l === "string" && l.trim().startsWith("└─"));
-    const footers = statuses().filter(Boolean);
     ok = (goalRenders.length > 0 ? PASS(`goal line rendered ${goalRenders.length}x`) : FAIL("goal line never rendered")) && ok;
     ok = (goalRenders.length >= 2 && new Set(goalRenders).size >= 2 ? PASS(`goal line updated ${new Set(goalRenders).size} distinct texts`) : FAIL("goal line never changed")) && ok;
     ok = (nestedRenders.length > 0 ? PASS(`nested focus row rendered: "${nestedRenders[0].trim().slice(0, 60)}"`) : FAIL("no └─ focus row was rendered")) && ok;
-    ok = (footers.length > 0 && footers[footers.length - 1].includes("⛳") ? PASS(`footer tracks the goal: "${footers[footers.length - 1].slice(0, 50)}"`) : FAIL("footer missing")) && ok;
+    ok = (footerStatusWrites().length === 0 ? PASS("footer status line untouched (the widget is the only surface)") : FAIL(`no agent-status footer writes (got ${footerStatusWrites().length})`)) && ok;
 
     console.log("\n-- OFF --");
     const offAt = records.length;
