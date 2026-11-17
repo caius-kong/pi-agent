@@ -113,11 +113,13 @@ function summarizeState(scenarioId) {
   let finalState = null;
   let providerResponses = 0;
   let costUsd = 0;
+  const modelErrors = [];
   for (const e of entries) {
     if (e.type === "message" && e.message?.role === "assistant") {
       providerResponses++;
       const usage = e.message.usage;
       costUsd += usage?.cost?.total ?? (typeof usage?.cost === "number" ? usage.cost : 0);
+      if (e.message.stopReason === "error") modelErrors.push(cleanText(e.message.errorMessage).slice(0, 200));
       for (const c of e.message.content ?? []) {
         if (c.type === "toolCall" && (c.toolName ?? c.name) === "set_goal") {
           goalCalls.push({ mode: c.arguments?.mode ?? "new", goal: cleanText(c.arguments?.goal) });
@@ -128,7 +130,16 @@ function summarizeState(scenarioId) {
       finalState = { goal: cleanText(e.data.goal), subGoal: cleanText(e.data.subGoal) };
     }
   }
-  return { goalCalls, finalState, providerResponses, costUsd };
+  return { goalCalls, finalState, providerResponses, costUsd, modelErrors };
+}
+
+/**
+ * A provider rejection (bad model id, revoked key) is not a scenario failure: it
+ * must surface as a thrown error so `main()` falls back to the next model instead
+ * of reporting the scenario as broken.
+ */
+function assertModelUsable(state) {
+  if (state.modelErrors.length > 0) throw new Error(`model error: ${state.modelErrors[0]}`);
 }
 
 function readPayloads(scenarioId) {
@@ -524,11 +535,13 @@ async function runRpcScenario(sc, model) {
       turnPayloads.push(all.slice(seen));
       seen = all.length;
     }
+    const state = summarizeState(sc.id);
+    assertModelUsable(state);
     return {
       records: rpc.records,
       payloads: readPayloads(sc.id),
       turnPayloads,
-      state: summarizeState(sc.id),
+      state,
     };
   } finally {
     await rpc.close();
@@ -562,10 +575,12 @@ function runHeadlessScenario(sc, model) {
     timeout: TURN_TIMEOUT_MS,
     encoding: "utf8",
   });
+  const state = summarizeState(sc.id);
+  assertModelUsable(state);
   return {
     records: [],
     payloads: readPayloads(sc.id),
-    state: summarizeState(sc.id),
+    state,
     headless: { status: result.status, stdout: result.stdout || "", stderr: result.stderr || "" },
   };
 }
