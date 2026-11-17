@@ -251,14 +251,14 @@ export default function agentGoal(pi: ExtensionAPI) {
     // maintenance rules into that one tool's declaration even when hidden.
     exposure: "model-only",
     description:
-      "Show the user the outcome you are working toward. Send it in the same response as your first action of a task that needs more than one tool call, and again when the outcome really pivots. Display bookkeeping only: it never changes your instructions. mode:\"new\" replaces the goal line, mode:\"rewrite\" re-expresses the same outcome after its text changed, mode:\"expand\" adds one nested focus row under an unchanged parent goal.",
-    promptSnippet: "Show the user the outcome you are working toward (send with your first action)",
+      "Show the user the outcome you are working toward. Send it when you start a task that needs more than one tool call — with your first action if you can, on its own if not — and again when the outcome really pivots. Display bookkeeping only: it never changes your instructions. mode:\"new\" replaces the goal line, mode:\"rewrite\" re-expresses the same outcome after its text changed, mode:\"expand\" adds one nested focus row under an unchanged parent goal.",
+    promptSnippet: "Show the user the outcome you are working toward (at task start or when it changes)",
     promptGuidelines: [
       "set_goal shows the user the outcome you are working toward. Send it when you start a task that needs more than one tool call — together with your first tool call if you can, on its own if not — and again when the outcome really pivots; a simple one-shot answer needs no call. It never changes your instructions or what you do next.",
       "Call set_goal mode:\"new\" only when you start an independent outcome — there is no current goal, or the user has moved to a different outcome. Continuing the same outcome is not a reason to call it, even right after a new user message; a separate new task inside the same repo still counts as an independent outcome. Never use mode:\"new\" for a step or a sub-problem of the outcome you already declared.",
       "Call set_goal mode:\"rewrite\" when the user adds a constraint to, or corrects, the outcome you already declared — for example \"also output the maximum\" for a script you already declared — and keep that outcome in the text. An added constraint always changes what you are pursuing, so always reflect it: never leave the goal line describing the older scope. Use mode:\"new\" only when the pursued outcome itself changes.",
       "Call set_goal mode:\"expand\" when the user turns to a part of the outcome you already declared — for example fixing a data row the script needs, or renaming variables inside it — and never mode:\"new\" for that: the parent goal line stays unchanged and only the nested focus row changes.",
-      "Only send it when the displayed outcome actually changes: do not re-send the same goal, and do not refresh the display for its own sake.",
+      "Do not re-send the same goal and do not call it just to refresh the display: send it when the goal line or the nested focus row would actually change.",
     ],
     parameters: Type.Object({
       goal: Type.String({

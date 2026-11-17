@@ -13,16 +13,39 @@
  * conversation. It needs a model that follows tool guidelines; weaker models
  * under-declare, so a failing run is a model signal as much as a code signal.
  *
+ * Evidence is captured per turn, immediately after `agent_settled`: the cumulative
+ * persisted state, the current widget, the `set_goal` calls and provider errors of
+ * that turn, and the provider payloads it produced. Every run writes to its own
+ * fresh directory (`os.tmpdir()/ag-accept-*`) and leaves it in place, so parallel
+ * runs cannot delete each other and a failure keeps its session/payload trail.
+ *
+ * A run is INVALID (exit 2) when the run itself failed — a provider error, a turn
+ * the provider was never asked about, or a request that did not carry the
+ * requested model/thinking level. Invalid runs are never retried and never
+ * reported as goal-tracking results. A turn that really ran and still failed an
+ * assertion is a BEHAVIOR failure (exit 1); it is not retried either.
+ *
  * Usage: node run-acceptance.cjs [--model <provider/model>] [--thinking <level>]
- * Exit: 0 if every tracking assertion holds.
+ * Exit: 0 every tracking assertion holds · 1 behavior failure · 2 invalid run.
  */
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  stripAnsiDeep,
+  parseSessionJsonl,
+  sessionSnapshot,
+  turnVerdict,
+  trackingChecks,
+  payloadMentionsSetGoal,
+  payloadConfigMismatch,
+  evidenceDir,
+  writeJson,
+} = require("./lib/goal-evidence.cjs");
 
 const EXT = path.join(process.env.HOME, ".pi/agent/extensions/agent-goal/index.ts");
-const PROBE = "/tmp/ag-accept/probe.ts";
-const ROOT = "/tmp/ag-accept";
+const ROOT = evidenceDir("ag-accept");
+const PROBE = path.join(ROOT, "probe.ts");
 const SESS_DIR = path.join(ROOT, "sessions");
 const WORK = path.join(ROOT, "work");
 const PAYLOAD_LOG = path.join(ROOT, "payloads.jsonl");
@@ -34,12 +57,9 @@ const arg = (name) => {
 const MODEL = arg("--model") || process.env.ACC_MODEL || "trendmicro/deepseek-v4.1-flash";
 const THINKING = arg("--thinking") || process.env.ACC_THINKING || "high";
 
-const clean = (s) => (s || "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim();
-const cleanDeep = (v) => (Array.isArray(v) ? v.map(cleanDeep) : typeof v === "string" ? clean(v) : v);
 const PASS = (m) => { console.log(`  ✓ ${m}`); return true; };
 const FAIL = (m) => { console.log(`  ✗ ${m}`); return false; };
 
-fs.rmSync(ROOT, { recursive: true, force: true });
 fs.mkdirSync(SESS_DIR, { recursive: true });
 fs.mkdirSync(WORK, { recursive: true });
 fs.writeFileSync(PROBE, `
@@ -127,17 +147,21 @@ async function turn(message) {
 
 // ── scenarios from the requirement ────────────────────────────────────────
 const TURNS = [
-  { id: "start", say: "在 /tmp/ag-accept/work 创建 data.txt，写入 20 行整数（每行一个），再写 summarize.mjs 读取它并打印总和与行数，然后实际运行 node summarize.mjs 验证。", modes: ["new"], goal: /summar|data|脚本|script/i, label: "task start" },
+  { id: "start", say: `在 ${WORK} 创建 data.txt，写入 20 行整数（每行一个），再写 summarize.mjs 读取它并打印总和与行数，然后实际运行 node summarize.mjs 验证。`, modes: ["new"], goal: /summar|data|脚本|script/i, label: "task start" },
   { id: "constraint", say: "summarize.mjs 还要输出最大值和中位数，改完重新运行一次。", modes: ["rewrite", "expand"], goal: /summar|data|脚本|script/i, label: "added constraint (same outcome)" },
   { id: "subproblem", say: "先把 data.txt 第 7 行的数字改成 70 —— 这是修数据的前置问题，处理完再继续。", modes: ["expand", null], goal: /summar|data|脚本|script/i, label: "sub-problem (parent must survive)" },
   { id: "step", say: "把 summarize.mjs 里的变量名改得更清楚一点。", modes: ["expand", null], goal: /summar|data|脚本|script/i, label: "mere step (no reset)" },
-  { id: "pivot", say: "脚本先不管了，改做另一件事：在 /tmp/ag-accept/work 写一个 README.md，说明这个目录里有什么。", modes: ["new"], goal: /readme/i, label: "pivot to a different outcome" },
+  { id: "pivot", say: `脚本先不管了，改做另一件事：在 ${WORK} 写一个 README.md，说明这个目录里有什么。`, modes: ["new"], goal: /readme/i, label: "pivot to a different outcome" },
   { id: "continue", say: "README.md 里再补一段运行示例。", modes: ["rewrite", "expand", null], goal: /readme/i, label: "continue the same outcome" },
 ];
 
 const widgets = () => records
   .filter((r) => r.type === "extension_ui_request" && r.method === "setWidget" && r.widgetKey === "agent-goal")
-  .map((r) => cleanDeep(r.widgetLines));
+  .map((r) => stripAnsiDeep(r.widgetLines));
+const currentWidget = () => {
+  const all = widgets();
+  return all.length ? all[all.length - 1] : undefined;
+};
 const footerStatusWrites = () => records
   .filter((r) => r.type === "extension_ui_request" && r.method === "setStatus" && r.statusKey === "agent-status");
 
@@ -146,37 +170,15 @@ function readSession() {
   try { files = fs.readdirSync(SESS_DIR).filter((f) => f.includes(SID) && f.endsWith(".jsonl")); } catch {}
   if (!files.length) return [];
   files.sort();
-  return fs.readFileSync(path.join(SESS_DIR, files[files.length - 1]), "utf8")
-    .split("\n").filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } });
+  return parseSessionJsonl(fs.readFileSync(path.join(SESS_DIR, files[files.length - 1]), "utf8"));
 }
 
-/** Calls grouped by the user turn that started them. */
-function callsByTurn() {
-  const turns = [];
-  for (const e of readSession()) {
-    const m = e.message;
-    if (e.type !== "message" || !m) continue;
-    if (m.role === "user") { turns.push([]); continue; }
-    if (m.role !== "assistant" || !turns.length) continue;
-    for (const c of m.content ?? []) {
-      if (c.type === "toolCall" && (c.name ?? c.toolName) === "set_goal") {
-        turns[turns.length - 1].push({ mode: c.arguments?.mode ?? "new", goal: clean(c.arguments?.goal) });
-      }
-    }
+function readPayloads() {
+  try {
+    return parseSessionJsonl(fs.readFileSync(PAYLOAD_LOG, "utf8")).map((line) => line.payload);
+  } catch {
+    return [];
   }
-  return turns;
-}
-
-/** Persisted goal after each user turn (the state entry written in that turn). */
-function stateByTurn() {
-  const turns = [];
-  for (const e of readSession()) {
-    if (e.type === "message" && e.message?.role === "user") { turns.push(null); continue; }
-    if (e.type === "custom" && e.customType === "agent-goal-state" && e.data && turns.length) {
-      turns[turns.length - 1] = { goal: clean(e.data.goal), subGoal: clean(e.data.subGoal) };
-    }
-  }
-  return turns;
 }
 
 function statusOnlyTurns() {
@@ -190,45 +192,91 @@ function statusOnlyTurns() {
   return n;
 }
 
+/**
+ * Run one prompt and record what the turn left behind, read immediately after
+ * `agent_settled` (not reconstructed afterwards from entry positions).
+ */
+async function runTurn(say) {
+  const entryFrom = readSession().length;
+  const payloadFrom = readPayloads().length;
+  await turn(say);
+  const entries = readSession();
+  const snapshot = sessionSnapshot(entries, entryFrom, entries.length);
+  const payloads = readPayloads();
+  return {
+    ...snapshot,
+    say,
+    entries: [entryFrom, entries.length],
+    widget: currentWidget(),
+    payloads: payloads.slice(payloadFrom),
+    payloadLines: [payloadFrom, payloads.length],
+  };
+}
+
+/** The part of a turn worth persisting: payload bodies stay in payloads.jsonl. */
+function evidenceOf(id, turnEvidence) {
+  return {
+    id,
+    state: turnEvidence.state,
+    calls: turnEvidence.calls,
+    providerErrors: turnEvidence.providerErrors,
+    providerResponses: turnEvidence.providerResponses,
+    widget: turnEvidence.widget,
+    entries: turnEvidence.entries,
+    payloadLines: turnEvidence.payloadLines,
+  };
+}
+
 (async () => {
   let ok = true;
-  try {
-    console.log(`== goal-tracking acceptance · ${MODEL} ==`);
-    for (const t of TURNS) await turn(t.say);
+  const evidence = { model: MODEL, thinking: THINKING, root: ROOT, turns: [], checks: [], off: null };
+  const finish = (code) => {
+    evidence.ok = code === 0;
+    writeJson(path.join(ROOT, "result.json"), evidence);
+    console.log(`\nevidence: ${ROOT}`);
+    try { proc.kill("SIGTERM"); } catch {}
+    process.exit(code);
+  };
 
-    const perTurn = callsByTurn();
-    const state = stateByTurn();
+  try {
+    console.log(`== goal-tracking acceptance · ${MODEL} @${THINKING} ==`);
+    const turnEvidence = [];
+    for (const t of TURNS) {
+      const snapshot = await runTurn(t.say);
+      turnEvidence.push(snapshot);
+      evidence.turns.push(evidenceOf(t.id, snapshot));
+    }
 
     console.log("\n-- what the model declared, per user turn --");
     TURNS.forEach((t, i) => {
-      const calls = perTurn[i] ?? [];
+      const calls = turnEvidence[i].calls;
       const shown = calls.length ? calls.map((c) => `${c.mode}: ${c.goal}`).join(" | ") : "(no call)";
       console.log(`  ${i + 1}. ${t.id.padEnd(10)} ${shown.slice(0, 150)}`);
     });
 
     console.log("\n-- goal tracking --");
-    TURNS.forEach((t, i) => {
-      const calls = perTurn[i] ?? [];
-      const last = calls.length ? calls[calls.length - 1] : null;
-      const modeOk = t.modes.includes(last ? last.mode : null);
-      ok = (modeOk
-        ? PASS(`${t.label}: mode ${last ? `"${last.mode}"` : "(none)"}`)
-        : FAIL(`${t.label}: expected mode ${JSON.stringify(t.modes)}, got ${last ? `"${last.mode}"` : "(none)"}`)) && ok;
+    const tracking = trackingChecks(TURNS, turnEvidence);
+    for (const result of tracking.results) ok = (result.ok ? PASS(result.label) : FAIL(result.label)) && ok;
+    evidence.checks = tracking.results;
 
-      const persisted = state[i];
-      const goalOk = persisted && t.goal.test(persisted.goal || "");
-      ok = (goalOk
-        ? PASS(`${t.label}: goal line still tracks the task ("${(persisted.goal || "").slice(0, 60)}")`)
-        : FAIL(`${t.label}: goal line lost the task (got "${persisted ? persisted.goal : "(none)"}")`)) && ok;
-
-      if (t.id === "subproblem" || t.id === "step") {
-        const nested = persisted?.subGoal;
-        const fine = !calls.length || (last.mode === "expand" && (nested || "").length > 0);
-        ok = (fine
-          ? PASS(`${t.label}: parent kept${nested ? `, focus nested as "${nested.slice(0, 50)}"` : ", no call"}`)
-          : FAIL(`${t.label}: parent/focus handling wrong (mode ${last.mode}, subGoal "${nested || ""}")`)) && ok;
+    console.log("\n-- provider payload --");
+    const invalid = [];
+    turnEvidence.forEach((snapshot, i) => {
+      const label = TURNS[i].label;
+      const verdict = turnVerdict(snapshot);
+      if (verdict.status !== "ok") invalid.push(`${label}: ${verdict.reason}`);
+      if (!snapshot.payloads.length) invalid.push(`${label}: no provider request captured`);
+      const mismatch = payloadConfigMismatch(snapshot.payloads, { model: MODEL, thinking: THINKING });
+      if (mismatch) invalid.push(`${label}: ${mismatch}`);
+      const leaked = snapshot.payloads.filter((p) => !payloadMentionsSetGoal(p)).length;
+      if (snapshot.payloads.length && leaked) {
+        ok = FAIL(`${label}: set_goal missing from ${leaked}/${snapshot.payloads.length} request(s) while ON`) && ok;
+      } else if (snapshot.payloads.length) {
+        ok = PASS(`${label}: set_goal declared in all ${snapshot.payloads.length} request(s)`) && ok;
       }
     });
+    const configMismatch = payloadConfigMismatch(readPayloads(), { model: MODEL, thinking: THINKING });
+    ok = (configMismatch ? FAIL(`requested config not honored: ${configMismatch}`) : PASS(`requests carry ${MODEL} @${THINKING}`)) && ok;
 
     console.log("\n-- display --");
     const all = widgets().filter(Boolean);
@@ -240,15 +288,26 @@ function statusOnlyTurns() {
     ok = (footerStatusWrites().length === 0 ? PASS("footer status line untouched (the widget is the only surface)") : FAIL(`no agent-status footer writes (got ${footerStatusWrites().length})`)) && ok;
 
     console.log("\n-- OFF --");
-    const offAt = records.length;
-    const callsBeforeOff = perTurn.flat().length;
     proc.stdin.write(`${JSON.stringify({ type: "prompt", message: "/agent-goal off" })}\n`);
     await waitFor((r) => r.type === "extension_ui_request" && r.method === "setWidget" && r.widgetKey === "agent-goal" && r.widgetLines === undefined, "widget cleared", 60000);
-    await turn("再给 data.txt 追加一行 42，然后告诉我总行数。");
-    const callsAfterOff = callsByTurn().flat().length;
-    const painted = records.slice(offAt).filter((r) => r.type === "extension_ui_request" && r.method === "setWidget" && r.widgetKey === "agent-goal" && r.widgetLines && r.widgetLines.length > 0).length;
-    ok = (callsAfterOff === callsBeforeOff ? PASS(`no declaration after OFF (${callsBeforeOff} -> ${callsAfterOff})`) : FAIL(`declared after OFF (${callsBeforeOff} -> ${callsAfterOff})`)) && ok;
+    const offFrom = readSession().length;
+    const offPayloadFrom = readPayloads().length;
+    const offRecords = records.length;
+    const offTurn = await runTurn("再给 data.txt 追加一行 42，然后告诉我总行数。");
+    const offPayloads = readPayloads().slice(offPayloadFrom);
+    const painted = records.slice(offRecords).filter((r) => r.type === "extension_ui_request" && r.method === "setWidget" && r.widgetKey === "agent-goal" && r.widgetLines && r.widgetLines.length > 0).length;
+    evidence.off = { ...evidenceOf("off", { ...offTurn, entries: [offFrom, readSession().length] }), painted };
+    const offVerdict = turnVerdict(offTurn);
+    if (offVerdict.status !== "ok") invalid.push(`OFF turn: ${offVerdict.reason}`);
+    if (!offPayloads.length) invalid.push("OFF turn: no provider request captured");
+    ok = (offTurn.calls.length === 0 ? PASS("no declaration after OFF") : FAIL(`declared after OFF: ${JSON.stringify(offTurn.calls)}`)) && ok;
     ok = (painted === 0 ? PASS("widget stayed cleared after OFF") : FAIL(`widget repainted ${painted}x after OFF`)) && ok;
+    // A payload that hides the declaration but still carries the rules is a leak;
+    // the scan covers tools, top-level system, role:system and role:developer.
+    const offLeaks = offPayloads.filter(payloadMentionsSetGoal).length;
+    ok = (offPayloads.length > 0 && offLeaks === 0
+      ? PASS(`no set_goal declaration or rule in the ${offPayloads.length} request(s) while OFF`)
+      : FAIL(`set_goal leaked while OFF (${offLeaks}/${offPayloads.length} requests; captured ${offPayloads.length})`)) && ok;
 
     proc.stdin.end();
     await new Promise((r) => { if (exited) return r(); const t = setTimeout(() => { proc.kill("SIGTERM"); r(); }, 15000); proc.on("exit", () => { clearTimeout(t); r(); }); });
@@ -256,13 +315,25 @@ function statusOnlyTurns() {
     const files = fs.readdirSync(WORK).sort();
     console.log(`\n-- real work on disk --\n  ${files.join(", ")}`);
     ok = (files.includes("data.txt") && files.includes("summarize.mjs") && files.includes("README.md") ? PASS("the agent really did the work with its own tools") : FAIL(`missing files: ${files.join(", ")}`)) && ok;
+    evidence.files = files;
 
     console.log(`\n-- scheduling cost (informational, expected) --\n  status-only turns: ${statusOnlyTurns()}`);
+
+    if (invalid.length) {
+      console.log("\n-- invalid run (infrastructure, not a goal-tracking verdict) --");
+      for (const reason of invalid) console.log(`  ! ${reason}`);
+      console.log("\n===== ACCEPTANCE INVALID (fix the run, then re-run; not retried to green) =====");
+      finish(2);
+      return;
+    }
     console.log(`\n===== ${ok ? "GOAL TRACKING ACCEPTED" : "GOAL TRACKING FAILED"} =====`);
-    process.exit(ok ? 0 : 1);
+    finish(ok ? 0 : 1);
   } catch (e) {
     console.error(`\n✗ acceptance threw: ${e.message}`);
+    evidence.error = e.message;
+    writeJson(path.join(ROOT, "result.json"), evidence);
+    console.error(`evidence: ${ROOT}`);
     try { proc.kill("SIGTERM"); } catch {}
-    process.exit(1);
+    process.exit(2);
   }
 })();

@@ -16,27 +16,52 @@
  *
  * A generated probe extension records every provider payload
  * (`before_provider_request`), so "the provider never saw set_goal" is asserted on
- * the actual request, not inferred from behavior.
+ * the actual request, not inferred from behavior. The scan covers tools, a
+ * top-level `system` field, and `role:"system"` / `role:"developer"` messages —
+ * the DeepSeek payload this repo runs against carries its rules in `developer`.
  *
- * Every scenario runs its own session with only this extension loaded.
+ * Every scenario runs its own session with only this extension loaded, inside a
+ * fresh `os.tmpdir()/ag-eval-*` directory. A run that fails keeps that directory
+ * (session, payload log, work dir) instead of deleting the evidence.
  *
- * Usage: node run-eval.cjs [--keep] [--scenario s1,s3] [--model <id>]
- *   --keep      keep session dirs and payload logs (default: wiped before/after)
+ * `invalid` is not `failed`: an invalid run never reached a behavior verdict
+ * (provider/model error, no provider response, or requests that did not carry the
+ * requested model/thinking level). Invalid runs are reported separately and are
+ * not retried to green; a red behavior assertion is never retried either.
+ *
+ * Usage: node run-eval.cjs [--keep] [--scenario s1,s3] [--model <id>] [--thinking <level>]
+ *   --keep      keep the evidence directory even when everything passes
  *   --scenario  comma-separated scenario ids (default: all)
  *   --model     override the model id (default: $AG_EVAL_MODEL or the cheap default)
- * Exit: 0 if all scenarios pass, 1 otherwise.
+ *   --thinking  override the thinking level (default: "low")
+ * Exit: 0 all scenarios pass · 1 behavior failure · 2 invalid run(s) only.
  */
 
 const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  stripAnsiDeep,
+  parseSessionJsonl,
+  callsIn,
+  providerErrorsIn,
+  sessionSnapshot,
+  payloadMentionsSetGoal,
+  payloadConfigMismatch,
+  evidenceDir,
+} = require("./lib/goal-evidence.cjs");
 
 const EXT = path.join(process.env.HOME, ".pi/agent/extensions/agent-goal/index.ts");
-const ROOT = "/tmp/ag-eval";
+const ROOT = evidenceDir("ag-eval");
 const SESS_DIR = path.join(ROOT, "sessions");
 const WORK_DIR = path.join(ROOT, "work");
 const PROBE = path.join(ROOT, "probe.ts");
 const PAYLOAD_DIR = path.join(ROOT, "payloads");
+const argOf = (name) => {
+  const index = process.argv.indexOf(name);
+  return index !== -1 ? process.argv[index + 1] : undefined;
+};
+const THINKING = argOf("--thinking") || "low";
 
 // Default model for the eval: the cheap flash model. Override with
 // AG_EVAL_MODELS='[...]' or --model when a different model needs checking.
@@ -52,8 +77,8 @@ let only = null;
   const idx = process.argv.indexOf("--scenario");
   if (idx !== -1) only = new Set((process.argv[idx + 1] || "").split(",").filter(Boolean));
 }
-const modelArg = process.argv.indexOf("--model");
-const MODELS_TO_RUN = modelArg !== -1 ? [process.argv[modelArg + 1]] : MODELS;
+const modelArg = argOf("--model");
+const MODELS_TO_RUN = modelArg ? [modelArg] : MODELS;
 
 const PREAMBLE =
   "You are simulating a working session on a fictional project; your only tool is set_goal. " +
@@ -77,19 +102,6 @@ export default function agentGoalEvalProbe(pi: any) {
 
 // ── helpers ───────────────────────────────────────────────────────────────
 
-function cleanText(s) {
-  return (s || "")
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
-    .trim();
-}
-
-function stripAnsiDeep(value) {
-  if (typeof value === "string") return cleanText(value);
-  if (Array.isArray(value)) return value.map(stripAnsiDeep);
-  return value;
-}
-
 function sessionFiles(scenarioId) {
   let files = [];
   try { files = fs.readdirSync(SESS_DIR).filter((f) => f.includes(scenarioId) && f.endsWith(".jsonl")); } catch {}
@@ -100,51 +112,57 @@ function sessionFiles(scenarioId) {
 function readSession(scenarioId) {
   const files = sessionFiles(scenarioId);
   if (!files.length) return [];
-  const out = [];
-  for (const line of fs.readFileSync(files[files.length - 1], "utf8").split("\n")) {
-    if (!line.trim()) continue;
-    try { out.push(JSON.parse(line)); } catch { /* torn tail */ }
-  }
-  return out;
+  return parseSessionJsonl(fs.readFileSync(files[files.length - 1], "utf8"));
 }
 
 function summarizeState(scenarioId) {
   const entries = readSession(scenarioId);
-  const goalCalls = [];
-  let finalState = null;
   let providerResponses = 0;
   let costUsd = 0;
-  const modelErrors = [];
-  for (const e of entries) {
-    if (e.type === "message" && e.message?.role === "assistant") {
+  for (const entry of entries) {
+    if (entry.type === "message" && entry.message?.role === "assistant") {
       providerResponses++;
-      const usage = e.message.usage;
+      const usage = entry.message.usage;
       costUsd += usage?.cost?.total ?? (typeof usage?.cost === "number" ? usage.cost : 0);
-      if (e.message.stopReason === "error") modelErrors.push(cleanText(e.message.errorMessage).slice(0, 200));
-      for (const c of e.message.content ?? []) {
-        if (c.type === "toolCall" && (c.toolName ?? c.name) === "set_goal") {
-          goalCalls.push({ mode: c.arguments?.mode ?? "new", goal: cleanText(c.arguments?.goal) });
-        }
-      }
-    }
-    if (e.type === "custom" && e.customType === "agent-goal-state" && e.data) {
-      finalState = { goal: cleanText(e.data.goal), subGoal: cleanText(e.data.subGoal) };
     }
   }
-  return { goalCalls, finalState, providerResponses, costUsd, modelErrors };
+  return {
+    goalCalls: callsIn(entries),
+    finalState: sessionSnapshot(entries, 0, entries.length).state,
+    providerResponses,
+    costUsd,
+    modelErrors: providerErrorsIn(entries),
+  };
 }
+
+/** The run itself failed; its assertions say nothing about goal tracking. */
+class InfraInvalid extends Error {}
+/** A run that may succeed on another attempt (rate limit, dropped connection). */
+class TransientInfra extends InfraInvalid {}
 
 /**
  * A provider rejection (bad model id, revoked key) is not a scenario failure: it
- * must surface as a thrown error so `main()` falls back to the next model instead
- * of reporting the scenario as broken.
+ * must surface as an invalid run so `main()` can fall back to the next model
+ * instead of reporting the scenario as broken. It is not retried on the same
+ * model — a rejection will not clear by itself.
  */
 function assertModelUsable(state) {
-  if (state.modelErrors.length > 0) throw new Error(`model error: ${state.modelErrors[0]}`);
+  const invalid = (ErrorClass, message) => {
+    const error = new ErrorClass(message);
+    error.costUsd = state.costUsd;
+    error.responses = state.providerResponses;
+    return error;
+  };
+  if (state.modelErrors.length > 0) throw invalid(InfraInvalid, `model error: ${state.modelErrors[0]}`);
   // A turn that produced no provider response at all is a failed run, not a
   // scenario result: reporting it as an assertion failure hides a transient
   // (rate limit, dropped connection) behind a red goal-tracking check.
-  if (state.providerResponses === 0) throw new Error("no provider response (transient)");
+  if (state.providerResponses === 0) throw invalid(TransientInfra, "no provider response (transient)");
+}
+
+function assertRequestConfig(payloads, model) {
+  const mismatch = payloadConfigMismatch(payloads, { model, thinking: THINKING });
+  if (mismatch) throw new InfraInvalid(`request config not honored: ${mismatch}`);
 }
 
 function readPayloads(scenarioId) {
@@ -157,27 +175,6 @@ function readPayloads(scenarioId) {
     }
   } catch {}
   return out;
-}
-
-/**
- * The part of a provider payload that declares tools and instructions: the tool
- * declarations and the system prompt (a top-level `system` field for some APIs,
- * a `role: "system"` message for OpenAI-compatible ones). Conversation text is
- * excluded — the eval's own prompt names the tool.
- */
-function payloadToolSurface(payload) {
-  const parts = [];
-  if (payload.tools) parts.push(JSON.stringify(payload.tools));
-  if (payload.system) parts.push(typeof payload.system === "string" ? payload.system : JSON.stringify(payload.system));
-  for (const message of payload.messages ?? []) {
-    if (message.role !== "system") continue;
-    parts.push(typeof message.content === "string" ? message.content : JSON.stringify(message.content));
-  }
-  return parts.join("\n");
-}
-
-function payloadMentionsSetGoal(payload) {
-  return /set_goal/.test(payloadToolSurface(payload));
 }
 
 /** Display-layer timeline from `extension_ui_request` records. */
@@ -212,7 +209,7 @@ function rpcArgs(scenarioId, model, payloadLog) {
     "-e", PROBE,
     "--tools", "set_goal",
     "--approve",
-    "--thinking", "low",
+    "--thinking", THINKING,
     "--model", model,
   ];
 }
@@ -531,9 +528,11 @@ async function runRpcScenario(sc, model) {
     }
     const state = summarizeState(sc.id);
     assertModelUsable(state);
+    const payloads = readPayloads(sc.id);
+    assertRequestConfig(payloads, model);
     return {
       records: rpc.records,
-      payloads: readPayloads(sc.id),
+      payloads,
       turnPayloads,
       state,
     };
@@ -559,7 +558,7 @@ function runHeadlessScenario(sc, model) {
     "-e", PROBE,
     "--tools", "set_goal",
     "--approve",
-    "--thinking", "low",
+    "--thinking", THINKING,
     "--model", model,
     "--",
   ];
@@ -571,9 +570,11 @@ function runHeadlessScenario(sc, model) {
   });
   const state = summarizeState(sc.id);
   assertModelUsable(state);
+  const payloads = readPayloads(sc.id);
+  assertRequestConfig(payloads, model);
   return {
     records: [],
-    payloads: readPayloads(sc.id),
+    payloads,
     state,
     headless: { status: result.status, stdout: result.stdout || "", stderr: result.stderr || "" },
   };
@@ -581,11 +582,6 @@ function runHeadlessScenario(sc, model) {
 
 async function main() {
   const toRun = scenarios.filter((s) => (only ? only.has(s.id) : true));
-  if (!keep) {
-    try { fs.rmSync(SESS_DIR, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(WORK_DIR, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(PAYLOAD_DIR, { recursive: true, force: true }); } catch {}
-  }
   fs.mkdirSync(SESS_DIR, { recursive: true });
   fs.mkdirSync(WORK_DIR, { recursive: true });
   fs.mkdirSync(PAYLOAD_DIR, { recursive: true });
@@ -593,6 +589,7 @@ async function main() {
 
   let passed = 0;
   let failed = 0;
+  let invalid = 0;
   let totalCost = 0;
   let totalResponses = 0;
   const perScenario = [];
@@ -601,21 +598,28 @@ async function main() {
     console.log(`\n== ${sc.id} ==`);
     let result = null;
     let modelUsed = MODELS_TO_RUN[0];
+    let invalidReason = null;
     for (const model of MODELS_TO_RUN) {
       for (let attempt = 1; attempt <= 2 && !result; attempt++) {
         try {
           result = sc.headless ? runHeadlessScenario(sc, model) : await runRpcScenario(sc, model);
           modelUsed = model;
         } catch (e) {
-          console.error(`  [${model}${attempt > 1 ? ` attempt ${attempt}` : ""}] ${String(e.message || e).split("\n")[0]}`);
+          invalidReason = String(e.message || e).split("\n")[0];
+          totalCost += typeof e.costUsd === "number" ? e.costUsd : 0;
+          totalResponses += typeof e.responses === "number" ? e.responses : 0;
+          console.error(`  [${model}${attempt > 1 ? ` attempt ${attempt}` : ""}] ${invalidReason}`);
+          // Only a transient failure may be retried; a rejected model or a
+          // request that ignored the requested config will fail the same way.
+          if (e instanceof InfraInvalid && !(e instanceof TransientInfra)) break;
         }
       }
       if (result) break;
     }
     if (!result) {
-      console.log("  ✗ scenario could not run on any configured model");
-      failed++;
-      perScenario.push({ id: sc.id, ok: false, model: modelUsed, costUsd: 0, responses: 0, display: null });
+      console.log(`  ! invalid run (not a goal-tracking verdict): ${invalidReason}`);
+      invalid++;
+      perScenario.push({ id: sc.id, status: "invalid", ok: false, model: modelUsed, costUsd: 0, responses: 0, reason: invalidReason });
       continue;
     }
 
@@ -632,6 +636,7 @@ async function main() {
     ok ? passed++ : failed++;
     perScenario.push({
       id: sc.id,
+      status: ok ? "pass" : "fail",
       ok,
       model: modelUsed,
       costUsd: cost,
@@ -645,15 +650,19 @@ async function main() {
     });
     if (totalCost > BUDGET_USD) {
       console.log(`\n!! budget exceeded: $${totalCost.toFixed(4)} > $${BUDGET_USD} — stopping`);
-      failed += toRun.length - (passed + failed);
+      failed += toRun.length - (passed + failed + invalid);
       break;
     }
   }
 
-  console.log(`\n===== ${passed}/${passed + failed} scenarios passed =====`);
+  const summary = [`${passed}/${passed + failed} scenarios passed`];
+  if (invalid) summary.push(`${invalid} invalid`);
+  console.log(`\n===== ${summary.join(" · ")} =====`);
   console.log(`model responses: ${totalResponses} · reported cost: $${totalCost.toFixed(4)}`);
   for (const row of perScenario) {
-    console.log(`  ${row.ok ? "PASS" : "FAIL"} ${row.id} · ${row.model} · ${row.responses} response(s) · $${row.costUsd.toFixed(4)}`);
+    const verdict = row.status === "invalid" ? "INVALID" : row.ok ? "PASS" : "FAIL";
+    console.log(`  ${verdict} ${row.id} · ${row.model} · ${row.responses} response(s) · $${row.costUsd.toFixed(4)}`);
+    if (row.reason) console.log(`       reason: ${row.reason}`);
     if (row.display) {
       console.log(`       widget: ${JSON.stringify(row.display.widget)}`);
       console.log(`       footer status writes: ${row.display.footerStatusWrites}`);
@@ -661,12 +670,10 @@ async function main() {
     }
   }
 
-  if (!keep) {
-    try { fs.rmSync(SESS_DIR, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(WORK_DIR, { recursive: true, force: true }); } catch {}
-    try { fs.rmSync(PAYLOAD_DIR, { recursive: true, force: true }); } catch {}
-  }
-  process.exit(failed ? 1 : 0);
+  const clean = passed + failed > 0 && failed === 0 && invalid === 0;
+  if (clean && !keep) fs.rmSync(ROOT, { recursive: true, force: true });
+  else console.log(`\nevidence: ${ROOT}`);
+  process.exit(failed ? 1 : invalid ? 2 : 0);
 }
 
 main().catch((e) => {

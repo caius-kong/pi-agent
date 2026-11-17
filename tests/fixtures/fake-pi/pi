@@ -1,0 +1,147 @@
+#!/usr/bin/env node
+/**
+ * Scripted stand-in for `pi --mode rpc`, used ONLY by
+ * tests/agent-goal-acceptance-script.test.mjs.
+ *
+ * It replays what a real run produces — RPC records, session JSONL entries and
+ * provider payloads — so the acceptance script's reading and classification can
+ * be driven without a model call. The entry order is the real one: the
+ * extension's `input` handler persists the carried-over state BEFORE core
+ * appends the user message, and `set_goal` persists again after the call.
+ *
+ * FAKE_PI_MODE:
+ *   normal        the scripted model declares per the guidelines, and makes no
+ *                 call on the "same outcome continues" turn
+ *   no-declaration never calls set_goal (a behavior failure)
+ *   provider-error the first turn ends with stopReason:"error" (an invalid run)
+ */
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const argv = process.argv.slice(2);
+const argOf = (name) => {
+  const index = argv.indexOf(name);
+  return index !== -1 ? argv[index + 1] : undefined;
+};
+const SESS_DIR = argOf("--session-dir") || process.cwd();
+const SID = argOf("--session-id") || "scripted";
+const PAYLOAD_LOG = process.env.AG_EVAL_PAYLOAD_LOG;
+const MODE = process.env.FAKE_PI_MODE || "normal";
+const SESSION_FILE = path.join(SESS_DIR, `scripted_${SID}.jsonl`);
+
+fs.mkdirSync(SESS_DIR, { recursive: true });
+
+const GOALS = {
+  start: "Create data.txt and summarize.mjs",
+  constraint: "Create data.txt and summarize.mjs with max and median",
+  subproblem: "Fix row 7 of data.txt",
+  step: "Rename variables in summarize.mjs",
+  pivot: "Write README.md describing this directory",
+};
+
+const state = { goal: null, subGoal: null };
+let off = false;
+let workWritten = false;
+
+const append = (entry) => fs.appendFileSync(SESSION_FILE, `${JSON.stringify(entry)}\n`);
+const emit = (record) => process.stdout.write(`${JSON.stringify(record)}\n`);
+const stateEntry = () => append({
+  type: "custom",
+  customType: "agent-goal-state",
+  data: { goal: state.goal, subGoal: state.subGoal, goalSetAt: null, lastPrompt: null, lastPromptAt: null },
+});
+const paint = (text) => {
+  const lines = [`user_prompt: ${text}`];
+  if (state.goal) {
+    lines.push(`agent_goal: ${state.goal}`);
+    if (state.subGoal) lines.push(`  └─ ${state.subGoal}`);
+  }
+  emit({ type: "extension_ui_request", method: "setWidget", widgetKey: "agent-goal", widgetLines: lines });
+};
+
+function declarationFor(text) {
+  if (MODE === "no-declaration") return null;
+  if (text.includes("创建 data.txt")) return { mode: "new", goal: GOALS.start };
+  if (text.includes("最大值和中位数")) return { mode: "rewrite", goal: GOALS.constraint };
+  if (text.includes("第 7 行")) return { mode: "expand", goal: GOALS.subproblem };
+  if (text.includes("变量名")) return { mode: "expand", goal: GOALS.step };
+  if (text.includes("改做另一件事")) return { mode: "new", goal: GOALS.pivot };
+  return null; // "add a run example" — the same outcome continues, no call
+}
+
+function writeWork() {
+  if (workWritten) return;
+  workWritten = true;
+  fs.writeFileSync("data.txt", `${Array.from({ length: 20 }, (_, i) => i + 1).join("\n")}\n`);
+  fs.writeFileSync("summarize.mjs", "console.log('sum', 'count');\n");
+  fs.writeFileSync("README.md", "# work directory\n");
+}
+
+function writePayload() {
+  if (!PAYLOAD_LOG) return;
+  const declared = !off;
+  const payload = {
+    model: "deepseek-v4.1-flash",
+    thinking: { type: "enabled" },
+    reasoning_effort: "high",
+    tools: declared ? [{ type: "function", function: { name: "set_goal" } }] : [],
+    messages: [{ role: "developer", content: declared ? "- set_goal: show the outcome you are working toward" : "- no goal tool here" }],
+  };
+  fs.appendFileSync(PAYLOAD_LOG, `${JSON.stringify({ payload })}\n`);
+}
+
+function handlePrompt(command) {
+  const text = command.message || "";
+  if (text.startsWith("/agent-goal off")) {
+    off = true;
+    // Cleared widget: the record carries no widgetLines at all.
+    emit({ type: "extension_ui_request", method: "setWidget", widgetKey: "agent-goal" });
+    return;
+  }
+  stateEntry(); // input handler persist, before the user message exists
+  append({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
+  writeWork();
+
+  const declaration = off ? null : declarationFor(text);
+  if (MODE === "provider-error" && !state.goal) {
+    append({ type: "message", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "rate limited" } });
+  } else if (declaration) {
+    append({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: `call-${Date.now()}`, name: "set_goal", arguments: { mode: declaration.mode, goal: declaration.goal } }],
+      },
+    });
+    if (declaration.mode === "expand" && state.goal) state.subGoal = declaration.goal;
+    else {
+      state.goal = declaration.goal;
+      state.subGoal = null;
+    }
+    stateEntry();
+  } else {
+    append({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
+  }
+
+  writePayload();
+  if (!off) paint(text);
+  if (command.id) emit({ type: "response", id: command.id, success: true, data: { disposition: "completed" } });
+  emit({ type: "agent_settled" });
+}
+
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\n")) !== -1) {
+    const line = buffer.slice(0, index).trim();
+    buffer = buffer.slice(index + 1);
+    if (!line) continue;
+    let command;
+    try { command = JSON.parse(line); } catch { continue; }
+    if (command.type === "prompt") handlePrompt(command);
+  }
+});
+process.stdin.on("end", () => process.exit(0));
