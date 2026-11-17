@@ -37,12 +37,11 @@ const WORK_DIR = path.join(ROOT, "work");
 const PROBE = path.join(ROOT, "probe.ts");
 const PAYLOAD_DIR = path.join(ROOT, "payloads");
 
-// The model the agent actually runs is the only one whose goal tracking is a
-// regression signal; the cheap flash models follow the guidelines less reliably
-// and flake on the mode choice, so they are fallbacks rather than the default.
+// Default model for the eval: the cheap flash model. Override with
+// AG_EVAL_MODELS='[...]' or --model when a different model needs checking.
 const MODELS = process.env.AG_EVAL_MODELS
   ? JSON.parse(process.env.AG_EVAL_MODELS)
-  : ["trendmicro/gpt-6.1-sol", "deepseek-v4-flash-0731"];
+  : ["trendmicro/deepseek-v4.1-flash"];
 const BUDGET_USD = 5;
 const TURN_TIMEOUT_MS = 240000;
 

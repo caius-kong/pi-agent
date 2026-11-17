@@ -10,8 +10,8 @@
  *
  * Unlike run-eval.cjs, the tool set is NOT reduced: this is a real agent doing real
  * work, so it is the check that the display still tracks a goal outside a simulated
- * conversation. It needs a model that follows tool guidelines; the cheap flash models
- * under-declare, so the default is the model the agent actually runs.
+ * conversation. It needs a model that follows tool guidelines; weaker models
+ * under-declare, so a failing run is a model signal as much as a code signal.
  *
  * Usage: node run-acceptance.cjs [--model <provider/model>]
  * Exit: 0 if every tracking assertion holds.
@@ -30,7 +30,7 @@ const SID = "accept-goal-tracking";
 const MODEL = (() => {
   const i = process.argv.indexOf("--model");
   if (i !== -1 && process.argv[i + 1]) return process.argv[i + 1];
-  return process.env.ACC_MODEL || "trendmicro/gpt-6.1-sol";
+  return process.env.ACC_MODEL || "trendmicro/deepseek-v4.1-flash";
 })();
 
 const clean = (s) => (s || "").replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "").replace(/[\x00-\x1f\x7f-\x9f]/g, "").trim();
