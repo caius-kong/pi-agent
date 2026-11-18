@@ -151,6 +151,75 @@ HINDSIGHT_API_TOKEN=<tenant key> ./bootstrap.sh \
 
 `install`/`update` 会覆盖 `dist/`，所以每次装完重跑 bootstrap 即可；上游修复后本步骤自动失效。
 
+### 2.3 可选：多个 repo 共享一个 bank（同一领域）
+
+默认一 repo 一 bank，而 **bank 是 recall 硬边界**（`recall` / `retain` / `reflect` 都在单个 bank 内，没有跨 bank 查询），所以跨 repo 的 agent 看不到别的 repo 的记忆。仅当这些 repo **本来就属于同一领域**（一个平台拆成多个服务、库 + 消费方）时才合并，且**要在积累历史之前做**：事后再合是搬记忆，不是改开关。
+
+这**不是** §2.1 说的那种用法。§2.1 禁止的是把第三方 clone 用 `mapPathToBank` 并进自己的项目 bank（一次问答就污染项目记忆）；这里是把自己拥有的、同一领域的 repo 显式收敛，并且每个 repo 仍保留独立的观测作用域。
+
+**机制二选一**
+
+| 机制 | 适用 | 代价 |
+|---|---|---|
+| `banks.<resolvedId>.bank` | 手挑的一组 repo | repo 搬家不受影响；目标 bank 自己的 section 不会被读取 |
+| `mapPathToBank` | 目录即边界，或 repo 不是 git 仓库 | repo 移动后映射失效 |
+
+`bank` 是**改名不是合并**：改名前的 id 不会发到 API，不复制任何数据，旧 bank 也不会被删除，只是再没有会话能解析到它——所以必须按下面第 3 步搬。
+
+**配置**（每个收敛项都要重复，因为目标 bank 的 section 不生效）
+
+```jsonc
+"banks": {
+  "coding-agent::repo-a": {
+    "bank": "coding-agent::shared",
+    "retainTags": ["project:{gitProject}"],
+    "observationScopes": [[], ["project:repo-a"]]
+  },
+  "coding-agent::repo-b": {
+    "bank": "coding-agent::shared",
+    "retainTags": ["project:{gitProject}"],
+    "observationScopes": [[], ["project:repo-b"]]
+  }
+}
+```
+
+- **空 scope 不能省。** `[[], ["project:<repo>"]]` 既给每个 repo 独立信念集，又保留页面读取的无 tag 全域层。写成只有非空项（如 `[["project:*"]]`）隔离效果一样，但页面会退化成只读原始事实——这层是页面 `tags_match: "all"` 的唯一入口。`per_source` 用的也是同一个 `[[], …]` 形状。
+- **优先字面值而非 glob**：每个 section 只覆盖一个 repo，字面值不依赖服务端 tag 匹配，也不依赖 1.1+ 的 glob 语义。
+- `coding-agent.json` 是 `JSON.parse`：一个 `//` 注释会让**整份配置**被丢弃并回落到默认值（只在 stderr 留一行，症状是记忆突然变安静）。
+
+**顺序：先冻结、再改配置、再搬**
+
+1. **冻结。** 运行中的 Pi 进程按 cwd 缓存了 runtime 与 bank，改配置**不会**重定向它们；在跑的 `deepen.js` 也在启动时快照配置。先退出这些 repo 里的 session，并确认旧 bank `pending_operations: 0`。
+2. **改配置并验证解析。** 每个 repo 里跑一次 `hindsight_diagnose`，`bank_id` 必须都是目标 bank。key 写错是**静默失效**（那个 repo 继续用自己的 bank）；改目录名或 `bankIdTemplate` 同样静默失效，必须重跑这一步。
+3. **搬不可再生的内容**：会话记录、手工 ingest 的文档、survey 产物。跳过 `gitlog:*`（共享 bank 会按 repo 重新 seed，且 per-repo id 会撞）与 `survey-baseline:*`（内部标记，无抽取内容）。四个必踩的机制：
+
+| 机制 | 说明 |
+|---|---|
+| 导出子集 | 必须带 `include_bank_config=false`，否则 `400` |
+| `download_url` | `result_metadata.download_url` 是**相对路径**，要拼 `apiUrl` |
+| 导入 body | 必须 `multipart/form-data` + 必填 `file` 字段；裸 `application/zip` 返回 `422` |
+| 目标 bank | `mode=merge` 到不存在的目标会自动创建，不需要预热会话 |
+
+迁入的事实保留原来的 `shared` scope，会落进无 tag 全域池；要按 repo 隔离得逐文档 `PATCH`（只重建 scope 真正变动的记忆）：
+
+```http
+PATCH /v1/default/banks/coding-agent::shared/documents/<doc_id>
+{"observation_scopes": [[], ["project:repo-a"]]}
+```
+
+**共享 bank 特有的坑**
+
+| 坑 | 说明 |
+|---|---|
+| `repository-*` 是全局槽位 | 其 document id 不带 repo（`repository-component-map` 在每个 repo 都是同一个 id），一个 bank 里最后写的赢，导入时其余被 `skip`。落选的要用 repo 作用域 id 重新 ingest，再删旧 bank |
+| `gitlog:<Repo>` 安全 | id 带 repo，多个 repo 各一份，共存不冲突 |
+| cold 判定是 bank 级 | 第一个 repo seed 完，其余就不再算 cold；`codebaseSurvey` 整个 bank 最多跑一次，而 pi 下根本不会跑（§2.2 同理，`resolveAgentBin` 无 pi 分支） |
+| 页面变家族级 | 改名后没有单一 `project`，页面 scope 子句变成"本 bank 由多个项目共享"；要 per-repo 页面得用 `customPages` + `tags`，代价是每页每次刷新一次合成 |
+| 无 per-call 过滤 | 没有 `hindsight_*` 工具接受 `bank` 或 `tags`，会话内无法把召回收窄到某个 repo。跨 repo 召回本就是目的，但不要向使用者承诺精度 |
+| `DELETE` 不可恢复 | 连同文档、事实、观测一起删；确认迁移后再执行 |
+
+**验收**：`GET /v1/default/banks/<shared>/observations/scopes` 必须同时有**空 tag 列表**和每个有数据的 repo 的 `["project:<repo>"]`（缺空项就是页面在退化）；`stats` 的 `pending_operations` 归零后再看计数；每个 repo 开一次会话生成它自己的 `gitlog:<Repo>`，读一个页面确认非空；`diag.jsonl` 里那次会话应出现 `session_start`（共享 bank）+ `inject_ok` + `retain_ok`，即召回与回写都落在共享 bank。
+
 ## 3. 迁移 / 备份 / 升级
 
 | 目的 | 路线 |
@@ -270,6 +339,7 @@ podman ps                       # restart=unless-stopped 的容器应已自动�
 - [ ] 容器 env 里 `HINDSIGHT_API_LLM_MODEL` / `HINDSIGHT_API_REFLECT_LLM_MODEL` / `HINDSIGHT_API_RERANKER_MAX_CANDIDATES` / `HINDSIGHT_VERSION` 与 §1.1 一致。
 - [ ] client `hindsight_diagnose` 通过；`coding-agent.json` 为 `0600`，`reflectTimeoutMs` 与实测 p90 对齐。
 - [ ] `optInOnly: true` 且 `optInPaths: ["~"]`，home 自身 bank 已 `disabled`（§2.1）；`/tmp` 下启动 agent 不产生新 bank，而 `/tmp` 下 home repo 的 linked worktree 落到 main repo 的 bank。
+- [ ] 若启用了共享 bank（§2.3）：每个收敛 repo 的 `hindsight_diagnose` 都指向同一 bank id；`observations/scopes` 同时含空 tag 列表与各 repo 的 `project:<repo>` 作用域；旧 bank 的不可再生内容已迁入或已明确放弃。
 - [ ] LLM key 的 `exp` 已记录并在到期前安排轮换；`POST /health/llm` 三个 operation 均 `connected`。
 - [ ] 重启（VM + 主机）后 API 自动恢复；secret 未进 Git/日志/命令行。
 
