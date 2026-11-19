@@ -637,10 +637,7 @@
           "contextWindow": 1000000,
           "maxTokens": 131072,
           "compat": {
-            "thinkingFormat": "deepseek"
-          },
-          "thinkingLevelMap": {
-            "off": null
+            "thinkingFormat": "openai"
           }
         },
         {
