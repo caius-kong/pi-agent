@@ -19,7 +19,7 @@ function askMessage(percent) {
     role: "user",
     content: [{
       type: "text",
-      text: `[Pi auto-compact check] Context usage is ${percent.toFixed(1)}% of the model window. Compact only at a natural checkpoint: a coherent unit of work is done, nothing is pending (no running tool, delegated work, queued message, or decision awaiting the user), the goal, key decisions, constraints, and next action would survive summarization, and the overall task still has remaining work. If all of that holds, call request_compaction once before you stop; compaction runs when this run settles and the task then continues automatically. Otherwise keep working, or stop normally if the task is finished.`,
+      text: `[Pi auto-compact check] Context usage (${percent.toFixed(1)}% of the model window) is above the active auto-compact threshold. Do not compact before doing any work on the active request. At the first safe checkpoint within that request, call request_compaction alone before starting the next substantial unit: a coherent unit is complete, the goal, decisions, constraints and next action can survive summarization, and no tool, delegated work, message or user decision is pending. Pi will resume the remaining work after compaction. Remaining task steps are not pending activity: a completed tool result can mark a checkpoint before the next substantial step. If a tool, delegation, message or decision is actually pending, keep working where possible. If only the final answer or a small wrap-up remains, finish normally. After compaction, wait for a new completed unit before requesting again.`,
     }],
     timestamp: Date.now(),
   };
@@ -28,7 +28,7 @@ function askMessage(percent) {
 // The held user request starts its own run, so nothing competes with this decision:
 // the request is data here, not a pending commitment to serve.
 export function judgmentMessage(percent, input) {
-  return `[Pi pre-turn compact check] Context usage is ${percent.toFixed(1)}% of the model window. A user request is held and is delivered after this decision — do not perform it here. It is:\n\n${input}\n\nDecide whether compaction preserves what that request needs. Reply SKIP-COMPACTION when the request continues the work in progress and depends on details above that a summary would blur; otherwise call request_compaction as the only tool.`;
+  return `[Pi pre-turn compact check] Context usage (${percent.toFixed(1)}% of the model window) is above the active auto-compact threshold. A user request is held and is delivered after this decision — do not perform it here. It is:\n\n${input}\n\nReply only SKIP-COMPACTION if a tool, delegation or queued message is pending, the request answers a question in an ongoing interview, a decision is unresolved, or needs exact prior details a summary could lose. Otherwise, if the request is independent or only needs a stable result or constraint a summary can preserve, call request_compaction exactly once as your only output. If neither case is clear, reply only SKIP-COMPACTION.`;
 }
 
 // Percent of the window at which a model's cheapest pricing tier stops applying.
@@ -367,11 +367,11 @@ export function registerAutoCompact(pi, {
     name: "request_compaction",
     label: "Request context compaction",
     description:
-      `Queue context compaction for Pi's final pre-settlement boundary. Call once as the only tool in the batch when context usage is strictly above the active auto-compact threshold, a coherent unit is complete, work remains, and nothing is pending. Pi commits the compaction and continuation drafts before continuing. Do not call it to wrap up a finished task, at the threshold or below, when auto-compact is off, or with unknown usage.`,
+      `Queue context compaction for Pi's final pre-settlement boundary. Call once as the only tool in the batch when context usage is strictly above the active auto-compact threshold, the active check identifies a safe boundary and nothing is pending. The held request in a pre-turn check is the next work, not a blocker. Pi commits the compaction and continuation drafts before continuing. Do not call it to wrap up a finished task, at the threshold or below, when auto-compact is off, or with unknown usage.`,
     promptSnippet: "Queue safe context compaction after this agent run settles",
     promptGuidelines: [
-      "Call request_compaction at most once per run, as the only tool in its batch, and only when the injected Pi runtime check reports context usage strictly above the active auto-compact threshold and a coherent unit of work is complete while the overall task still has remaining work. The tool ends the current run so the extension can prepare a compaction draft at Pi's final pre-settlement boundary; Pi commits it before continuing.",
-      "Do not call it to wrap up a finished task: compaction is followed by an automatic continue, which is only useful when more work remains.",
+      "Call request_compaction at most once per run, as the only tool in its batch, and only when the injected Pi runtime check reports context usage strictly above the active auto-compact threshold and the active check’s branch-specific criteria hold. The tool ends the current run so the extension can prepare a compaction draft at Pi's final pre-settlement boundary; Pi commits it before continuing.",
+      "Do not call it to wrap up a finished task with no next work. In pre-turn checks, the held request is the next work.",
       "Call it alone, not alongside other tools; Pi only ends the run when every tool in the batch opts into termination.",
       "Before calling, confirm no tool is running, no delegated work or supervisor decision is pending, and no queued message exists. Ensure the goal, key decisions, constraints, and next action can survive summarization.",
       "At or below the active threshold, when auto-compact is off, with unknown usage, or if the tool declines, keep working.",
