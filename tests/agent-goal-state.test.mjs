@@ -12,8 +12,10 @@
  * Covered: single-parameter schema (no `mode`), the 300-char boundary, "" as a
  * legal clear, storage restore (including an entry written by the older
  * two-field contract), display (two single entries, no nested row), ANSI
- * stripping, and the fixed-text footprint budget (declaration + snippet +
- * guidelines <= 888 chars, chars/4 <= 222).
+ * stripping, the fixed-text footprint budget (declaration + snippet +
+ * guidelines <= 888 chars, chars/4 <= 222), and the SHIPPED instruction
+ * surface: a candidate measured in a temp file is not delivered until these
+ * assertions see its wording in `index.ts` (scenario E).
  *
  * Run: node tests/agent-goal-state.test.mjs   (node >= 23.6 with --experimental-strip-types default)
  * Requires local node_modules symlinks to the pnpm store; auto-created below.
@@ -287,6 +289,40 @@ console.log(`\n== D: fixed prompt footprint ==`);
   check(total <= FOOTPRINT_MAX_CHARS && totalWithStrict <= FOOTPRINT_MAX_CHARS,
     `declaration+snippet+guidelines = ${total} chars (with "strict":false ${totalWithStrict}; <= ${FOOTPRINT_MAX_CHARS}, chars/4 = ${total / 4})`,
     `declaration ${declaration.length} + snippet ${snippetLine.length} + guidelines ${ruleLines.length}`);
+}
+
+// ── scenario E: the shipped instruction surface ───────────────────────────
+// A candidate only ever measured through `--extension <temp file>` leaves this
+// file untouched and every earlier scenario green, because they all pass a
+// temp copy. These assertions read what `index.ts` itself registers, so
+// "validated" and "delivered" cannot drift apart silently.
+console.log(`\n== E: shipped instruction surface ==`);
+{
+  const description = setGoal.description ?? "";
+  const guidelines = (setGoal.promptGuidelines ?? []).join("\n");
+  const surface = `${description}\n${guidelines}`;
+
+  // E1 — the description states WHEN to call, not only what is displayed.
+  check(/\bCall\b/.test(description) && /(change|clear|first)/i.test(description),
+    "the shipped description says when to call", description);
+  // E2 — the rejected trigger must not come back: no "every user message".
+  check(!/(each|every)\s+(new\s+)?user message/i.test(surface),
+    "the shipped instruction does not restore the update-on-every-message trigger", description);
+  // E3 — the three summary rules the approved contract needs are present.
+  check(/(merge|fold|incorporat)/i.test(guidelines), "the guideline says to merge added requirements", guidelines);
+  check(/(retain|keep|unfinished|open)/i.test(guidelines), "the guideline says to retain unfinished work", guidelines);
+  check(/(omit|remove|drop)/i.test(guidelines), "the guideline says to drop finished or cancelled work", guidelines);
+
+  // E4 — the README's cost numbers describe THIS surface, not an older one.
+  const readme = fs.readFileSync(path.join(__dirname, "..", "agent", "extensions", "agent-goal", "README.md"), "utf8");
+  const fn = { name: setGoal.name, description, parameters: setGoal.parameters };
+  const declaration = JSON.stringify({ type: "function", function: fn });
+  const snippetLine = `- ${setGoal.name}: ${setGoal.promptSnippet}`;
+  const ruleLines = (setGoal.promptGuidelines ?? []).map((g) => `- ${g}`).join("\n");
+  const total = declaration.length + snippetLine.length + ruleLines.length;
+  check(readme.includes(`${total} 字符`), `the README states the measured ${total} chars`, readme.split("\n").find((l) => l.includes("固定输入")) ?? "");
+  check(readme.includes(`${Math.round(total / 4)} token`), `the README states the measured ~${Math.round(total / 4)} tokens`,
+    readme.split("\n").find((l) => l.includes("固定输入")) ?? "");
 }
 
 console.log(`\n===== unit: ${passed} passed, ${failed} failed =====`);
