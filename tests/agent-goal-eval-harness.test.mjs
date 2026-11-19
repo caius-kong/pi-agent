@@ -9,17 +9,20 @@
  * entry order a real session writes.
  *
  * Covered:
- *   1. A turn that legally makes no `set_goal` call still shows the goal the
+ *   1. A turn that legally makes no `set_goal` call still shows the summary the
  *      previous turn left behind (the extension persists on `input`, BEFORE core
  *      appends the user message, so entry order is not turn order).
  *   2. The instruction surface of a provider payload includes `developer` blocks
  *      and a top-level `system` field, not only `role:"system"` messages.
- *   3. "The parent goal survived" compares the parent line to the previous turn's
- *      parent line instead of a loose topic regex.
- *   4. The recorded payload really carries the requested model and thinking level.
- *   5. A failed run (provider error / no provider response) is classified invalid,
+ *   3. The summary assertions: a missing part fails, a finished goal still on the
+ *      line fails, and a legal empty summary (no goal left) passes.
+ *   4. The declaration has to come first in the turn: a `set_goal` call after
+ *      another tool call fails the order check.
+ *   5. A summary over 300 characters fails.
+ *   6. The recorded payload really carries the requested model and thinking level.
+ *   7. A failed run (provider error / no provider response) is classified invalid,
  *      not as a behavior failure.
- *   6. Evidence directories are unique per run.
+ *   8. Evidence directories are unique per run.
  *
  * Run: node --test tests/agent-goal-eval-harness.test.mjs
  */
@@ -47,27 +50,26 @@ const {
 // Entry order mirrors a real session: the extension's `input` handler persists
 // the carried-over state BEFORE core appends the user message for that turn.
 
-const stateEntry = (goal, subGoal = null) => ({
+const stateEntry = (goal) => ({
   type: "custom",
   customType: "agent-goal-state",
-  data: { goal, subGoal, goalSetAt: null, lastPrompt: null, lastPromptAt: null },
+  data: { goal, lastPrompt: null, lastPromptAt: null },
 });
 const userMsg = (text) => ({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
 const assistantText = (text) => ({ type: "message", message: { role: "assistant", content: [{ type: "text", text }] } });
-const assistantCall = (mode, goal) => ({
-  type: "message",
-  message: { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "set_goal", arguments: { mode, goal } }] },
-});
+const toolCall = (name, args = {}) => ({ type: "toolCall", id: `${name}-1`, name, arguments: args });
+const assistantCalls = (...calls) => ({ type: "message", message: { role: "assistant", content: calls } });
+const setGoal = (goal) => assistantCalls(toolCall("set_goal", { goal }));
 const assistantError = (message) => ({
   type: "message",
   message: { role: "assistant", content: [], stopReason: "error", errorMessage: message },
 });
 
-test("a turn with no set_goal call keeps the goal the previous turn left behind", () => {
+test("a turn with no set_goal call keeps the summary the previous turn left behind", () => {
   const entries = [
     stateEntry(null), // session start / first input
     userMsg("Write a README for this directory."),
-    assistantCall("new", "Write README.md describing this directory"),
+    setGoal("Write README.md describing this directory"),
     stateEntry("Write README.md describing this directory"), // set_goal persist
     stateEntry("Write README.md describing this directory"), // 2nd input persist, before its user message
     userMsg("Also add a run example to it."),
@@ -76,12 +78,23 @@ test("a turn with no set_goal call keeps the goal the previous turn left behind"
 
   const first = sessionSnapshot(entries, 0, 4);
   assert.equal(first.state?.goal, "Write README.md describing this directory");
-  assert.equal(first.calls.length, 1);
+  assert.deepEqual(first.calls, [{ goal: "Write README.md describing this directory" }]);
 
   const second = sessionSnapshot(entries, 4, entries.length);
   assert.deepEqual(second.calls, [], "the second turn made no declaration");
   assert.equal(second.state?.goal, "Write README.md describing this directory");
-  assert.equal(second.state?.subGoal, null);
+});
+
+test("a legal clear is kept as an empty declaration, not dropped", () => {
+  const entries = [
+    stateEntry("Write README.md describing this directory"),
+    userMsg("Nothing else to do."),
+    setGoal(""),
+    stateEntry(null),
+  ];
+  const snap = sessionSnapshot(entries, 1, entries.length);
+  assert.deepEqual(snap.calls, [{ goal: "" }], "an empty goal is a declaration, not a missing one");
+  assert.equal(snap.state?.goal, null);
 });
 
 test("the instruction surface covers developer blocks, role:system and top-level system", () => {
@@ -103,41 +116,114 @@ test("the instruction surface covers developer blocks, role:system and top-level
 
 // ── tracking assertions ───────────────────────────────────────────────────
 
-const TRACKING_TURNS = [
-  { id: "start", modes: ["new"], goal: /summar|data|脚本|script/i, label: "task start" },
-  { id: "subproblem", modes: ["expand", null], goal: /summar|data|脚本|script/i, label: "sub-problem (parent must survive)" },
+const TURNS = [
+  {
+    id: "join",
+    label: "task 2 joins",
+    expect: [
+      { label: "task 1 is still there", match: /stats|numbers/i },
+      { label: "task 2 follows, separated by \"; \"", match: /(stats|numbers)[^;]*;[^;]*readme/is },
+    ],
+  },
+  {
+    id: "done",
+    label: "task 2 finished",
+    expect: [{ label: "task 1 remains", match: /stats|numbers/i }],
+    forbid: [{ label: "the finished README goal is removed", match: /readme/i }],
+  },
+  {
+    id: "clear",
+    label: "no goals left",
+    expect: [{ label: "no goal left: the summary is empty", empty: true }],
+  },
 ];
 
-const snapshot = (state, calls = []) => ({ state, calls, providerErrors: [], providerResponses: 1 });
-
-test("a parent goal that was replaced fails the parent-preserved check", () => {
-  const replaced = [
-    snapshot({ goal: "Create data.txt and summarize.mjs", subGoal: null }, [
-      { mode: "new", goal: "Create data.txt and summarize.mjs" },
-    ]),
-    snapshot({ goal: "Rename variables in summarize.mjs", subGoal: "Rename variables" }, [
-      { mode: "expand", goal: "Rename variables" },
-    ]),
-  ];
-
-  const verdict = trackingChecks(TRACKING_TURNS, replaced);
-  assert.equal(verdict.ok, false, "a parent line that changed must fail even if it still matches the topic regex");
-  assert.ok(verdict.results.some((result) => !result.ok && /parent/.test(result.label)));
+// `events` is what the assistant actually emitted, in order: "text" for an answer
+// chunk, the tool name for a call. It defaults to the tool calls plus a trailing
+// answer, which is what a compliant turn looks like.
+const snapshot = (state, calls = [], events = ["set_goal"]) => ({
+  state,
+  calls,
+  callOrder: events.filter((event) => event !== "text"),
+  events,
+  providerErrors: [],
+  providerResponses: 1,
 });
 
-test("an unchanged parent with a nested focus passes the parent-preserved check", () => {
-  const kept = [
-    snapshot({ goal: "Create data.txt and summarize.mjs", subGoal: null }, [
-      { mode: "new", goal: "Create data.txt and summarize.mjs" },
-    ]),
-    snapshot({ goal: "Create data.txt and summarize.mjs", subGoal: "Fix row 7 of data.txt" }, [
-      { mode: "expand", goal: "Fix row 7 of data.txt" },
-    ]),
+test("the summary assertions hold for a real two-goal then cleared session", () => {
+  const snapshots = [
+    snapshot({ goal: "Write stats.mjs; write README.md" }, [{ goal: "Write stats.mjs; write README.md" }], ["set_goal", "bash"]),
+    snapshot({ goal: "Write stats.mjs" }, [{ goal: "Write stats.mjs" }], ["set_goal"]),
+    snapshot({ goal: null }, [{ goal: "" }], ["set_goal"]),
   ];
-  assert.equal(trackingChecks(TRACKING_TURNS, kept).ok, true);
+  const verdict = trackingChecks(TURNS, snapshots);
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.results.filter((r) => !r.ok)));
+});
 
-  const noCall = [kept[0], snapshot({ goal: "Create data.txt and summarize.mjs", subGoal: null }, [])];
-  assert.equal(trackingChecks(TRACKING_TURNS, noCall).ok, true);
+test("a legal empty summary is not a failure", () => {
+  const snapshots = [
+    snapshot({ goal: "Write stats.mjs; write README.md" }, [{ goal: "Write stats.mjs; write README.md" }], ["set_goal"]),
+    snapshot({ goal: "Write stats.mjs" }, [{ goal: "Write stats.mjs" }], ["set_goal"]),
+    // The clear turn: state is null and the declaration itself is "".
+    snapshot({ goal: null }, [{ goal: "" }], ["set_goal"]),
+  ];
+  const clearTurn = TURNS[2];
+  const verdict = trackingChecks([clearTurn], [snapshots[2]]);
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.results));
+  assert.ok(verdict.results.some((r) => /empty summary/.test(r.label)));
+});
+
+test("a finished goal still on the summary fails", () => {
+  const snapshots = [
+    snapshot({ goal: "Write stats.mjs; write README.md" }, [{ goal: "Write stats.mjs; write README.md" }], ["set_goal"]),
+    snapshot({ goal: "Write stats.mjs; write README.md" }, [{ goal: "Write stats.mjs; write README.md" }], ["set_goal"]),
+    snapshot({ goal: null }, [{ goal: "" }], ["set_goal"]),
+  ];
+  const verdict = trackingChecks([TURNS[1]], [snapshots[1]]);
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.results.some((r) => !r.ok && /README goal is removed/.test(r.label)), JSON.stringify(verdict.results));
+});
+
+test("a summary that lost a goal fails the retention check", () => {
+  const lost = snapshot({ goal: "Write README.md" }, [{ goal: "Write README.md" }], ["set_goal"]);
+  const verdict = trackingChecks([TURNS[0]], [lost]);
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.results.some((r) => !r.ok && /task 1 is still there/.test(r.label)));
+});
+
+test("a turn that answers and never declares fails on both counts", () => {
+  const chatty = snapshot({ goal: "Write stats.mjs" }, [], ["text"]);
+  const verdict = trackingChecks([TURNS[1]], [chatty]);
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.results.some((r) => !r.ok && /expected a set_goal call/.test(r.label)));
+});
+
+test("a turn that should have declared but did not fails", () => {
+  const missing = snapshot({ goal: "Write stats.mjs" }, [], []);
+  const verdict = trackingChecks([TURNS[1]], [missing]);
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.results.some((r) => !r.ok && /expected a set_goal call/.test(r.label)));
+});
+
+test("the OFF turn must not declare", () => {
+  const turn = { id: "off", label: "OFF turn", call: "forbidden", expect: [{ label: "summary unchanged", match: /stats/i }] };
+  assert.equal(trackingChecks([turn], [snapshot({ goal: "Write stats.mjs" }, [], [])]).ok, true);
+  const declared = trackingChecks([turn], [snapshot({ goal: "Write stats.mjs" }, [{ goal: "x" }], ["set_goal"])]);
+  assert.equal(declared.ok, false);
+});
+
+test("a DECLARED goal over the 300-char limit fails even though the store truncated it", () => {
+  // The extension stores `goal.slice(0, 300)`, so the persisted summary can never
+  // exceed the limit. Reading the stored value would therefore always pass; the
+  // declaration is the only place the over-long text is visible.
+  const long = "x".repeat(301);
+  const truncated = "x".repeat(300);
+  const verdict = trackingChecks([{ id: "long", label: "long summary" }], [snapshot({ goal: truncated }, [{ goal: long }])]);
+  assert.equal(verdict.ok, false);
+  assert.ok(verdict.results.some((r) => !r.ok && /301 chars, over the 300 limit/.test(r.label)), JSON.stringify(verdict.results));
+
+  const legal = trackingChecks([{ id: "legal", label: "legal summary" }], [snapshot({ goal: truncated }, [{ goal: truncated }])]);
+  assert.equal(legal.ok, true, JSON.stringify(legal.results));
 });
 
 // ── payload config ────────────────────────────────────────────────────────

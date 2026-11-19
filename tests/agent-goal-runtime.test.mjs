@@ -266,7 +266,7 @@ test("H1: agent-goal does not force the system prompt; later structured sections
 test("H2: ON — provider sees the set_goal declaration and its guidelines; widget renders the goal", async () => {
   const h = await createHarness();
   try {
-    await h.run([fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export", mode: "new" })]), fauxAssistantMessage("ok")], "Add CSV export.");
+    await h.run([fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export" })]), fauxAssistantMessage("ok")], "Add CSV export.");
     const view = h.request(0);
     assert.ok(hasSetGoal(view), "set_goal is declared while enabled with a UI");
     assert.ok(promptMentionsSetGoal(view), "set_goal guidelines/rules are in the provider prompt");
@@ -285,7 +285,7 @@ test("H2: ON — provider sees the set_goal declaration and its guidelines; widg
 test("H2: OFF — declaration and guidelines disappear from the provider; widget cleared", async () => {
   const h = await createHarness();
   try {
-    await h.run([fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export", mode: "new" })]), fauxAssistantMessage("ok")], "Add CSV export.");
+    await h.run([fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export" })]), fauxAssistantMessage("ok")], "Add CSV export.");
     assert.ok(hasSetGoal(h.request(0)), "precondition: set_goal declared while ON");
 
     await h.session.prompt("/agent-goal off");
@@ -333,7 +333,7 @@ test("H2: OFF between two responses of the SAME run — the next response is cle
     };
 
     await h.run(
-      [fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export", mode: "new" })]), fauxAssistantMessage("done")],
+      [fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export" })]), fauxAssistantMessage("done")],
       "Add CSV export.",
     );
 
@@ -440,7 +440,7 @@ for (const mode of ["on", "only"]) {
           `codemode description does not mention set_goal (hasUI=${hasUI}): ${codemodeTool.description.slice(0, 400)}`,
         );
         assert.ok(
-          !/Declare your current task goal|status display/i.test(codemodeTool.description),
+          !/still-open session goals|Still-open goals/i.test(codemodeTool.description),
           `codemode description does not inline set_goal's rules (hasUI=${hasUI})`,
         );
         assert.ok(!promptMentionsSetGoal(view), `provider prompt does not mention set_goal (hasUI=${hasUI})`);
@@ -456,7 +456,7 @@ for (const mode of ["on", "only"]) {
 test("H2: a set_goal call after OFF is a no-op; OFF -> ON restores the display", async () => {
   const h = await createHarness();
   try {
-    await h.run([fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export", mode: "new" })]), fauxAssistantMessage("ok")], "Add CSV export.");
+    await h.run([fauxAssistantMessage([fauxToolCall("set_goal", { goal: "Ship CSV export" })]), fauxAssistantMessage("ok")], "Add CSV export.");
     const stateEntries = () => h.session.sessionManager.getBranch().filter((e) => e.type === "custom" && e.customType === "agent-goal-state");
     const before = stateEntries().length;
     assert.ok(before > 0, "precondition: state was persisted while ON");
@@ -468,7 +468,7 @@ test("H2: a set_goal call after OFF is a no-op; OFF -> ON restores the display",
     // A model that still remembers the tool name can emit the call; the agent
     // executes it because the tool stays active (only its declaration is hidden).
     await h.run(
-      [fauxAssistantMessage([fauxToolCall("set_goal", { goal: "LATE GOAL AFTER OFF", mode: "new" })]), fauxAssistantMessage("ok")],
+      [fauxAssistantMessage([fauxToolCall("set_goal", { goal: "LATE GOAL AFTER OFF" })]), fauxAssistantMessage("ok")],
       "Keep going.",
     );
     assert.equal(stateEntries().length, before, "a late call after OFF does not persist state");

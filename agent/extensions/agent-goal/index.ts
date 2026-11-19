@@ -1,33 +1,21 @@
 /**
- * agent-goal — main-agent current-status header
+ * agent-goal — the main agent's session goals, shown above the editor
  *
- * Shows, in real time, what the MAIN agent is currently working toward,
- * WITHOUT touching /goal routing, auto-continuation, or any scheduling.
- * It is purely a display layer for the user:
+ * Two display lines, nothing else:
+ *   user_prompt:  the last real user prompt (from the `input` event)
+ *   agent_goal:   the still-open goals of this session (from `set_goal`)
  *
- *   user_prompt:  the last real user prompt (from `input` event)
- *   agent_goal:   the agent's self-declared current goal (from `set_goal` tool;
- *                 the instruction lives only in the tool's `promptGuidelines`)
+ * `set_goal({ goal })` takes exactly one string:
+ *   - a non-empty summary replaces the goal line with up to 300 characters
+ *     describing the current goals or remaining todos.
+ *   - an empty string clears the goal line (no goal left).
  *
- * set_goal has three modes, mirroring the two kinds of change a goal line can
- * undergo plus focus drill-down:
- *   mode:"new"      — a brand-new goal (task start) or a full task pivot;
- *                     replaces the agent_goal line. (user's "new goal")
- *   mode:"rewrite"  — the same goal, now re-expressed because its text needs to
- *                     grow/expand or its wording became misleading; replaces the
- *                     agent_goal line but MUST keep the core outcome recognizable.
- *                     (user's "rewrite goal")
- *   mode:"expand"   — drilling into a sub-task/sub-problem of the declared goal;
- *                     leaves the agent_goal line BYTE-IDENTICAL and adds one nested
- *                     `  └─ ` focus row. Never replaces the parent with the sub-task
- *                     name. Focus rows replace the previous nested row (do not stack).
+ * Which goal is finished, cancelled, superseded or paused is the MAIN agent's
+ * judgement; this extension only stores and displays the text. There is no task
+ * database, no validator, no automatic call, no continuation.
  *
- * Both lines render in the same dim grey as pi's statusline — this is auxiliary
- * status info, not reading material. The widget is the only surface: a footer
- * copy would repeat the same goal text and, being variable-length, push the
- * other extensions' footer switches out of the single status line.
- * Zero extra LLM calls, zero timers, zero loops, zero subagents. Fully
- * independent from @narumitw/pi-goal (distinct widget key, distinct tool name).
+ * `user_prompt` and `agent_goal` are each one widget entry; the TUI word-wraps a
+ * long entry, so a long summary needs no nested or extra rows.
  *
  * Visibility is a loadout concern, not a state-machine concern: `set_goal` is
  * `exposure: "model-only"` (never callable from another tool, so codemode cannot
@@ -52,15 +40,13 @@ import { Type } from "typebox";
 const WIDGET_KEY = "agent-goal";
 const STATE_ENTRY_TYPE = "agent-goal-state";
 const TOOL_NAME = "set_goal";
-const GOAL_MAX_LEN = 120; // the goal line's length budget, stated in the parameter docs
+const GOAL_MAX_LEN = 300; // the goal line's length budget, stated in the parameter docs
 const PROMPT_MAX_LEN = 400;
 
 // ─── state ────────────────────────────────────────────────────────────────
 
 interface GoalState {
-  goal: string | null;
-  subGoal: string | null; // nested current focus under `goal` (mode:"expand"), display-only
-  goalSetAt: number | null;
+  goal: string | null; // summary of the still-open goals; null = no goal left
   lastPrompt: string | null;
   lastPromptAt: number | null;
 }
@@ -94,8 +80,6 @@ function cleanString(v: unknown, fallback: string | null): string | null {
 export default function agentGoal(pi: ExtensionAPI) {
   const state: GoalState = {
     goal: null,
-    subGoal: null,
-    goalSetAt: null,
     lastPrompt: null,
     lastPromptAt: null,
   };
@@ -137,8 +121,6 @@ export default function agentGoal(pi: ExtensionAPI) {
     try {
       pi.appendEntry(STATE_ENTRY_TYPE, {
         goal: state.goal,
-        subGoal: state.subGoal,
-        goalSetAt: state.goalSetAt,
         lastPrompt: state.lastPrompt,
         lastPromptAt: state.lastPromptAt,
       });
@@ -151,8 +133,6 @@ export default function agentGoal(pi: ExtensionAPI) {
     // Reset local state first so a branch without any goal/prompt entry
     // renders empty instead of showing stale values from a previous branch.
     state.goal = null;
-    state.subGoal = null;
-    state.goalSetAt = null;
     state.lastPrompt = null;
     state.lastPromptAt = null;
     try {
@@ -160,12 +140,14 @@ export default function agentGoal(pi: ExtensionAPI) {
       // returns every branch in file order, so reverse-scanning it could pick
       // a stale state entry from an abandoned branch. getBranch() walks the
       // parentId chain from the current leaf, so it can only see this path.
+      //
+      // Entries written before the single-string contract may carry a `subGoal`
+      // or a `goalSetAt`; `goal` was already the display line then, so reading it
+      // is the whole restore. The dropped fields are simply not read.
       for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
         if (entry.type === "custom" && entry.customType === STATE_ENTRY_TYPE) {
-          const d = entry.data as Partial<GoalState>;
+          const d = entry.data as Record<string, unknown>;
           state.goal = cleanString(d.goal, null);
-          state.subGoal = cleanString(d.subGoal, null);
-          state.goalSetAt = typeof d.goalSetAt === "number" ? d.goalSetAt : null;
           state.lastPrompt = cleanString(d.lastPrompt, null);
           state.lastPromptAt = typeof d.lastPromptAt === "number" ? d.lastPromptAt : null;
           break;
@@ -189,9 +171,6 @@ export default function agentGoal(pi: ExtensionAPI) {
     }
     if (state.goal) {
       lines.push(theme.fg("dim", `agent_goal: ${state.goal}`));
-      if (state.subGoal) {
-        lines.push(theme.fg("dim", `  └─ ${state.subGoal}`));
-      }
     }
 
     if (lines.length === 0) {
@@ -244,34 +223,22 @@ export default function agentGoal(pi: ExtensionAPI) {
 
   pi.registerTool({
     name: TOOL_NAME,
-    label: "Set Current Goal",
+    label: "Set Current Goals",
     // `model-only`: declared to the model while active, never callable from
     // another tool. codemode lists every callable tool's description and
     // guidelines in its own description, so a callable set_goal would leak its
     // maintenance rules into that one tool's declaration even when hidden.
     exposure: "model-only",
-    description:
-      "Show the user the outcome you are working toward. Send it when you start a task that needs more than one tool call — with your first action if you can, on its own if not — and again when the outcome really pivots. Display bookkeeping only: it never changes your instructions. mode:\"new\" replaces the goal line, mode:\"rewrite\" re-expresses the same outcome after its text changed, mode:\"expand\" adds one nested focus row under an unchanged parent goal.",
-    promptSnippet: "Show the user the outcome you are working toward (at task start or when it changes)",
+    description: "Display one sentence about this session's current goals or remaining todos. Call when goals first become clear or materially change, after a user message or during work.",
+    promptSnippet: "Show the current session goal or remaining todos",
     promptGuidelines: [
-      "set_goal shows the user the outcome you are working toward. Send it when you start a task that needs more than one tool call — together with your first tool call if you can, on its own if not — and again when the outcome really pivots; a simple one-shot answer needs no call. It never changes your instructions or what you do next.",
-      "Call set_goal mode:\"new\" only when you start an independent outcome — there is no current goal, or the user has moved to a different outcome. Continuing the same outcome is not a reason to call it, even right after a new user message; a separate new task inside the same repo still counts as an independent outcome. Never use mode:\"new\" for a step or a sub-problem of the outcome you already declared.",
-      "Call set_goal mode:\"rewrite\" when the user adds a constraint to, or corrects, the outcome you already declared — for example \"also output the maximum\" for a script you already declared — and keep that outcome in the text. An added constraint always changes what you are pursuing, so always reflect it: never leave the goal line describing the older scope. Use mode:\"new\" only when the pursued outcome itself changes.",
-      "Call set_goal mode:\"expand\" when the user turns to a part of the outcome you already declared — for example fixing a data row the script needs, or renaming variables inside it — and never mode:\"new\" for that: the parent goal line stays unchanged and only the nested focus row changes.",
-      "Do not re-send the same goal and do not call it just to refresh the display: send it when the goal line or the nested focus row would actually change.",
+      "Call set_goal before replying or starting work on a new or changed goal. Refresh the summary when you discover, finish or change a goal, not for routine steps. Merge added requirements, retain unfinished work (including paused work), and omit completed, cancelled or superseded work.",
     ],
     parameters: Type.Object({
       goal: Type.String({
-        minLength: 1,
         maxLength: GOAL_MAX_LEN,
-        description: "One short sentence (<=120 chars) describing the outcome you are currently working to achieve.",
+        description: "Still-open goals; \"\" clears.",
       }),
-      mode: Type.Optional(
-        Type.Union([Type.Literal("new"), Type.Literal("rewrite"), Type.Literal("expand")], {
-          description:
-            "\"new\" (default) replaces the goal line — a new task or a pivot. \"rewrite\" replaces the line with a re-expression of the SAME core goal (text growth/wording fix); the core outcome must stay recognizable. \"expand\" keeps the existing parent goal byte-identical and adds one nested focus row (later expands replace the previous row); with no parent goal it behaves like \"new\".",
-        }),
-      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       // A model can still emit a call for a tool whose declaration it no longer
@@ -284,31 +251,22 @@ export default function agentGoal(pi: ExtensionAPI) {
         };
       }
       lastCtx = ctx;
-      const goal = String(params.goal ?? "").trim();
+      const goal = stripAnsi(typeof params.goal === "string" ? params.goal : "");
       if (!goal) {
+        // An empty summary is a valid declaration: no goal is left.
+        state.goal = null;
+        persist();
+        refresh();
         return {
-          content: [{ type: "text", text: "goal must not be empty" }],
-          details: { error: true },
+          content: [{ type: "text", text: "No open goal: the goal line is cleared." }],
+          details: {},
         };
       }
-      const mode = params.mode === "rewrite" || params.mode === "expand" ? params.mode : "new";
-      const clean = stripAnsi(goal).slice(0, GOAL_MAX_LEN);
-      if (mode === "expand" && state.goal) {
-        // Keep the parent goal, nest the current focus as a sub-goal. This is a
-        // display refinement, so the parent goal timestamp is preserved.
-        state.subGoal = clean;
-      } else {
-        state.goal = clean;
-        state.subGoal = null;
-        state.goalSetAt = Date.now();
-      }
+      state.goal = goal.slice(0, GOAL_MAX_LEN);
       persist();
       refresh();
-      const label = mode === "expand" && state.subGoal
-        ? `sub-goal nested under "${state.goal}": ${state.subGoal}`
-        : `Current goal set: ${state.goal}`;
       return {
-        content: [{ type: "text", text: label }],
+        content: [{ type: "text", text: `Open goals: ${state.goal}` }],
         details: {},
       };
     },

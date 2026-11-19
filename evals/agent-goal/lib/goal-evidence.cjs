@@ -10,6 +10,11 @@
  *   - the provider payload log — what the provider was actually sent (model,
  *     thinking config, tool declarations and instruction blocks).
  *
+ * The contract read here is the single-string one: `set_goal({ goal })`, where
+ * `goal` is the summary of the session's still-open goals, at most 300 chars,
+ * and `""` means no goal is left. There is no mode and no parent/child line, so
+ * nothing here compares a "parent goal" across turns.
+ *
  * Keeping that reading here lets `tests/agent-goal-eval-harness.test.mjs` drive
  * it with deterministic fixtures: no model call, no `pi` process.
  */
@@ -19,6 +24,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const STATE_ENTRY_TYPE = "agent-goal-state";
+const GOAL_MAX_LEN = 300;
 
 function cleanText(s) {
   return (s || "")
@@ -43,27 +49,55 @@ function parseSessionJsonl(text) {
   return entries;
 }
 
-// Mirrors the extension's own reader: an empty persisted value means "none", so
-// the snapshot shape is the same whether or not the field was written.
+// Mirrors the extension's own reader: an empty persisted value means "no goal",
+// so the snapshot shape is the same whether or not the field was written.
+// Entries from the older two-field contract may carry `subGoal`/`goalSetAt`;
+// `goal` was already the display line then, and the dropped fields are ignored.
 function stateOf(entry) {
-  return {
-    goal: cleanText(entry.data.goal) || null,
-    subGoal: cleanText(entry.data.subGoal) || null,
-  };
+  return { goal: cleanText(entry.data.goal) || null };
 }
 
-/** `set_goal` calls in the given entry range, in order. */
-function callsIn(entries) {
+/** Tool calls in the given entry range, in transcript order. */
+function toolCallsIn(entries) {
   const calls = [];
   for (const entry of entries) {
     if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
     for (const content of entry.message.content ?? []) {
-      if (content.type === "toolCall" && (content.name ?? content.toolName) === "set_goal") {
-        calls.push({ mode: content.arguments?.mode ?? "new", goal: cleanText(content.arguments?.goal) });
-      }
+      if (content.type === "toolCall") calls.push({ name: content.name ?? content.toolName, arguments: content.arguments ?? {} });
     }
   }
   return calls;
+}
+
+/**
+ * What the assistant actually did, in order: `"text"` for a non-empty answer
+ * chunk, the tool name for a tool call. The contract asks for the declaration
+ * before the model answers OR acts, so an order check that only lists tool calls
+ * cannot see a turn that answered first and declared afterwards.
+ */
+function turnEvents(entries) {
+  const events = [];
+  for (const entry of entries) {
+    if (entry.type !== "message" || entry.message?.role !== "assistant") continue;
+    for (const content of entry.message.content ?? []) {
+      if (content.type === "text") {
+        if (String(content.text ?? "").trim()) events.push("text");
+      } else if (content.type === "toolCall") {
+        events.push(content.name ?? content.toolName);
+      }
+    }
+  }
+  return events;
+}
+
+/**
+ * `set_goal` calls in the given entry range, in order. A call with `goal: ""` is
+ * a legal clear, so it is kept with an empty string rather than dropped.
+ */
+function callsIn(entries) {
+  return toolCallsIn(entries)
+    .filter((call) => call.name === "set_goal")
+    .map((call) => ({ goal: typeof call.arguments.goal === "string" ? cleanText(call.arguments.goal) : null }));
 }
 
 /**
@@ -84,16 +118,19 @@ function providerErrorsIn(entries) {
 /**
  * What the display layer held once the turn covering entries [from, to) settled.
  *
- * `state` is the extension's persisted goal — the LAST state entry written up to
- * the settle boundary, which is the cumulative state even for a turn that made
- * no `set_goal` call. It must not be located relative to the user message: the
- * extension persists from its `input` handler, which core runs BEFORE it appends
- * the user message, so a state entry for turn N sits above turn N's user message
- * and any "state after the newest user message" reading reports turn N as empty.
+ * `state` is the extension's persisted summary — the LAST state entry written up
+ * to the settle boundary, which is the cumulative state even for a turn that
+ * made no `set_goal` call. It must not be located relative to the user message:
+ * the extension persists from its `input` handler, which core runs BEFORE it
+ * appends the user message, so a state entry for turn N sits above turn N's user
+ * message and any "state after the newest user message" reading reports turn N
+ * as empty.
  *
- * `calls` are the declarations made during the turn, `providerResponses` how many
- * assistant entries the turn produced, and `providerErrors` the failed provider
- * responses (empty means the turn really ran).
+ * `calls` are the `set_goal` declarations of the turn, `callOrder` every tool
+ * name the turn called in transcript order, `events` everything the assistant did
+ * in order (including `"text"`), `providerResponses` how many assistant entries
+ * the turn produced, and `providerErrors` the failed provider responses (empty
+ * means the turn really ran).
  */
 function sessionSnapshot(entries, from, to) {
   let state = null;
@@ -106,7 +143,14 @@ function sessionSnapshot(entries, from, to) {
   }
   const window = entries.slice(from, to);
   const providerResponses = window.filter((entry) => entry.type === "message" && entry.message?.role === "assistant").length;
-  return { state, calls: callsIn(window), providerErrors: providerErrorsIn(window), providerResponses };
+  return {
+    state,
+    calls: callsIn(window),
+    callOrder: toolCallsIn(window).map((call) => call.name),
+    events: turnEvents(window),
+    providerErrors: providerErrorsIn(window),
+    providerResponses,
+  };
 }
 
 /**
@@ -123,51 +167,90 @@ function turnVerdict(snapshot) {
 }
 
 /**
- * Goal-tracking assertions for one acceptance turn list.
+ * Goal-tracking assertions for one turn list.
  *
- * `turns[i]` is the scenario (`id`, `modes`, `goal` regexp, `label`);
- * `snapshots[i]` is what `sessionSnapshot` reported once that turn settled.
+ * A turn declares what its own user message should leave behind:
+ *   id, label, say
+ *   expect   [{ label, match?: RegExp, check?: (summary) => boolean, empty?: true }] —
+ *            the summary must pass every entry: `match` a regexp, `check` a
+ *            predicate for a structural property a regexp cannot express, `empty`
+ *            that no goal is left (the line is cleared).
+ *   forbid   [{ label, match: RegExp }] — a finished, cancelled or superseded
+ *            goal must not appear at all (only a paused goal keeps a marker).
+ *   call     "required" for a material change, or "forbidden" otherwise.
+ *   afterWork checks that a goal learned from work is declared after the read.
+ * The 300-char limit is checked on the declared call, not the stored
+ * summary — the extension truncates on write, so the stored value can never
+ * exceed it and checking it would prove nothing. `snapshots[i]` is what
+ * `sessionSnapshot` reported for that turn.
  */
 function trackingChecks(turns, snapshots) {
   const results = [];
   turns.forEach((turn, index) => {
-    const calls = snapshots[index]?.calls ?? [];
-    const last = calls.length ? calls[calls.length - 1] : null;
-    const modeOk = turn.modes.includes(last ? last.mode : null);
-    results.push({
-      ok: modeOk,
-      label: modeOk
-        ? `${turn.label}: mode ${last ? `"${last.mode}"` : "(none)"}`
-        : `${turn.label}: expected mode ${JSON.stringify(turn.modes)}, got ${last ? `"${last.mode}"` : "(none)"}`,
-    });
+    const snap = snapshots[index] ?? {};
+    const label = turn.label ?? turn.id;
+    const summary = snap.state?.goal ?? "";
+    const calls = snap.calls ?? [];
+    const declared = calls.length > 0;
 
-    const persisted = snapshots[index]?.state;
-    const goalOk = Boolean(persisted && turn.goal.test(persisted.goal || ""));
-    results.push({
-      ok: goalOk,
-      label: goalOk
-        ? `${turn.label}: goal line still tracks the task ("${(persisted.goal || "").slice(0, 60)}")`
-        : `${turn.label}: goal line lost the task (got "${persisted ? persisted.goal : "(none)"}")`,
-    });
-
-    if (turn.id === "subproblem" || turn.id === "step") {
-      const nested = persisted?.subGoal;
-      // "The parent survived" means the parent LINE survived: it must be the
-      // same line the previous turn left behind, byte for byte. A topic regex
-      // alone cannot tell "Create data.txt and summarize.mjs" from the replaced
-      // "Rename variables in summarize.mjs".
-      const parent = snapshots[index - 1]?.state?.goal ?? null;
-      const parentKept = parent === null || persisted?.goal === parent;
-      const fine = !calls.length
-        ? parentKept
-        : last.mode === "expand" && parentKept && (nested || "").length > 0;
+    if (turn.call === "forbidden") {
       results.push({
-        ok: fine,
-        label: fine
-          ? `${turn.label}: parent kept${nested ? `, focus nested as "${nested.slice(0, 50)}"` : ", no call"}`
-          : `${turn.label}: parent/focus handling wrong (parent ${parent === null ? "(none)" : `"${parent.slice(0, 50)}"`} -> "${(persisted?.goal || "").slice(0, 50)}", mode ${last?.mode ?? "(none)"}, subGoal "${nested || ""}")`,
+        ok: !declared,
+        label: declared
+          ? `${label}: no declaration expected, got ${JSON.stringify(calls)}`
+          : `${label}: no declaration`,
+      });
+    } else {
+      results.push({
+        ok: declared,
+        label: declared
+          ? `${label}: declared the summary`
+          : `${label}: expected a set_goal call for a material goal change, got none`,
       });
     }
+
+    if (turn.afterWork) {
+      const events = snap.events ?? [];
+      const work = events.findIndex((event) => event === "read" || event === "bash");
+      const lastGoal = events.lastIndexOf("set_goal");
+      const ok = work >= 0 && lastGoal > work && turn.afterWork.test(calls.at(-1)?.goal ?? "")
+        && events.slice(0, work).filter((e) => e === "set_goal").every((_, i) => !turn.afterWork.test(calls[i]?.goal ?? ""));
+      results.push({ ok, label: `${label}: updated after discovering the new goal (events ${JSON.stringify(events)})` });
+    }
+
+    for (const expectation of turn.expect ?? []) {
+      const expectationLabel = `${label}: ${expectation.label}`;
+      if (expectation.empty) {
+        results.push({
+          ok: summary === "",
+          label: summary === "" ? `${expectationLabel} (empty summary)` : `${expectationLabel} (got "${summary}")`,
+        });
+      } else {
+        const ok = expectation.check ? expectation.check(summary) : expectation.match.test(summary);
+        results.push({
+          ok,
+          label: ok ? `${expectationLabel} ("${summary.slice(0, 70)}")` : `${expectationLabel} (got "${summary}")`,
+        });
+      }
+    }
+
+    for (const forbidden of turn.forbid ?? []) {
+      const ok = !forbidden.match.test(summary);
+      results.push({
+        ok,
+        label: ok
+          ? `${label}: ${forbidden.label}`
+          : `${label}: ${forbidden.label} (still in "${summary}")`,
+      });
+    }
+
+    const over = calls.filter((call) => typeof call.goal === "string" && call.goal.length > GOAL_MAX_LEN);
+    results.push({
+      ok: over.length === 0,
+      label: over.length === 0
+        ? `${label}: every declared goal is within ${GOAL_MAX_LEN} chars`
+        : `${label}: a declared goal is ${over[0].goal.length} chars, over the ${GOAL_MAX_LEN} limit`,
+    });
   });
   return { ok: results.every((result) => result.ok), results };
 }
@@ -276,10 +359,12 @@ function writeJson(file, value) {
 
 module.exports = {
   STATE_ENTRY_TYPE,
+  GOAL_MAX_LEN,
   cleanText,
   stripAnsiDeep,
   parseSessionJsonl,
   callsIn,
+  turnEvents,
   providerErrorsIn,
   sessionSnapshot,
   turnVerdict,

@@ -4,15 +4,8 @@
  *
  * `tests/fixtures/fake-pi/pi` stands in for `pi --mode rpc` and replays the
  * records, session entries and provider payloads a real run produces. That makes
- * the acceptance script's own behavior testable:
- *
- *   1. A turn that legally makes no `set_goal` call is not read as "goal lost"
- *      (the extension persists on `input`, before core appends the user message).
- *   2. Each run gets its own evidence directory and leaves `result.json` with the
- *      per-turn state, widget, calls, provider errors and payload line ranges.
- *   3. A provider error makes the run INVALID (exit 2), never a behavior failure.
- *   4. A model that never declares stays a BEHAVIOR failure (exit 1) — a red
- *      behavior result is not laundered into "invalid", and is not retried.
+ * the acceptance script testable without model calls: semantic retention,
+ * in-turn discovery, no redundant update, and failure/evidence handling.
  *
  * Run: node --test tests/agent-goal-acceptance-script.test.mjs
  */
@@ -48,7 +41,7 @@ function runAcceptance(env = {}, args = []) {
   return { ...result, evidenceDir, evidence };
 }
 
-test("the acceptance script carries the goal across a legal no-call turn", () => {
+test("the acceptance script tracks the session goals across five turns", () => {
   const run = runAcceptance();
   try {
     assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
@@ -56,17 +49,28 @@ test("the acceptance script carries the goal across a legal no-call turn", () =>
     assert.ok(run.evidenceDir, "the run must report its evidence directory");
 
     const turns = run.evidence.turns;
-    assert.equal(turns.length, 6);
-    const last = turns[turns.length - 1];
-    assert.deepEqual(last.calls, [], "the last turn made no declaration");
-    assert.match(last.state.goal, /readme/i, "the goal line the previous turn set is still there");
-    assert.ok(last.providerResponses > 0, "the turn really ran");
-    assert.deepEqual(last.providerErrors, []);
-    assert.ok(Array.isArray(last.payloadLines) && last.payloadLines[1] > last.payloadLines[0], "payload evidence is addressed");
-    assert.equal(run.evidence.off.painted, 0, "the widget stayed cleared after OFF");
+    assert.equal(turns.length, 5);
+
+    const byId = Object.fromEntries(turns.map((turn) => [turn.id, turn]));
+    assert.match(byId["task1-start"].state.goal, /numbers|stats/i);
+    assert.match(byId["task1-supplement"].state.goal, /json/i);
+    assert.match(byId["task2-joins"].state.goal, /readme/i);
+    assert.deepEqual(byId["same-goal"].calls, []);
+    assert.equal(byId["same-goal"].state.goal, byId["task2-joins"].state.goal);
+    assert.match(byId.discovery.state.goal, /Japanese/);
+    assert.match(byId.discovery.state.goal, /median/);
+    assert.deepEqual(byId.discovery.events, ["read", "set_goal"]);
+    assert.ok(turns.every((turn) => turn.providerResponses > 0), "every turn really ran");
+    assert.deepEqual(turns.flatMap((turn) => turn.providerErrors), []);
+    assert.ok(Array.isArray(turns[0].payloadLines) && turns[0].payloadLines[1] > turns[0].payloadLines[0], "payload evidence is addressed");
+    assert.equal(run.evidence.off.paints, 0, "the widget stayed cleared after OFF");
+    assert.deepEqual(run.evidence.off.calls, [], "nothing was declared after OFF");
+    assert.deepEqual(run.evidence.off.stateEntries[0], run.evidence.off.stateEntries[1],
+      "the OFF turn wrote no state entry, so the stored summary was left alone");
 
     // The payload log is preserved next to result.json, so the ranges resolve.
     const payloadLines = fs.readFileSync(path.join(run.evidenceDir, "payloads.jsonl"), "utf8").split("\n").filter(Boolean);
+    const last = turns[turns.length - 1];
     assert.ok(payloadLines.length >= last.payloadLines[1]);
     assert.ok(fs.existsSync(path.join(run.evidenceDir, "sessions")), "the session trail is preserved");
   } finally {
@@ -99,6 +103,36 @@ test("an explicit candidate path reaches Pi and is recorded in the evidence", ()
   }
 });
 
+test("an unchanged goal must not be refreshed", () => {
+  const run = runAcceptance({ FAKE_PI_MODE: "redundant" });
+  try {
+    assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
+    assert.match(run.stdout, /follow-up leaves the goals unchanged: no declaration expected/);
+  } finally {
+    if (run.evidenceDir) fs.rmSync(run.evidenceDir, { recursive: true, force: true });
+  }
+});
+
+test("a summary joining goals in prose passes", () => {
+  const run = runAcceptance({ FAKE_PI_SEPARATOR: " and also " });
+  try {
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+    assert.match(run.evidence.turns.find((turn) => turn.id === "task2-joins").state.goal, /and also/);
+  } finally {
+    if (run.evidenceDir) fs.rmSync(run.evidenceDir, { recursive: true, force: true });
+  }
+});
+
+test("a stale summary after discovery is a behavior failure", () => {
+  const run = runAcceptance({ FAKE_PI_MODE: "stale-discovery" });
+  try {
+    assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
+    assert.match(run.stdout, /✗ .*updated after discovering the new goal/);
+  } finally {
+    if (run.evidenceDir) fs.rmSync(run.evidenceDir, { recursive: true, force: true });
+  }
+});
+
 test("a provider error makes the run invalid, not a goal-tracking failure", () => {
   const run = runAcceptance({ FAKE_PI_MODE: "provider-error" });
   try {
@@ -119,8 +153,8 @@ test("an interrupted Pi run keeps the completed turns and the pending turn", () 
     assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
     assert.match(run.stdout, /evidence directory: /);
     assert.equal(run.evidence.status, "invalid");
-    assert.deepEqual(run.evidence.turns.map((turn) => turn.id), ["start"]);
-    assert.equal(run.evidence.pendingTurn, "constraint");
+    assert.deepEqual(run.evidence.turns.map((turn) => turn.id), ["task1-start"]);
+    assert.equal(run.evidence.pendingTurn, "task1-supplement");
   } finally {
     if (run.evidenceDir) fs.rmSync(run.evidenceDir, { recursive: true, force: true });
   }

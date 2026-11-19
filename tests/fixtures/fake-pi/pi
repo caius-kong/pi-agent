@@ -6,14 +6,10 @@
  * It replays what a real run produces — RPC records, session JSONL entries and
  * provider payloads — so the acceptance script's reading and classification can
  * be driven without a model call. The entry order is the real one: the
- * extension's `input` handler persists the carried-over state BEFORE core
+ * extension's `input` handler persists the carried-over summary BEFORE core
  * appends the user message, and `set_goal` persists again after the call.
  *
- * FAKE_PI_MODE:
- *   normal        the scripted model declares per the guidelines, and makes no
- *                 call on the "same outcome continues" turn
- *   no-declaration never calls set_goal (a behavior failure)
- *   provider-error the first turn ends with stopReason:"error" (an invalid run)
+ * The scripted model declares material changes and leaves stable goals alone.
  */
 
 const fs = require("node:fs");
@@ -32,50 +28,46 @@ const SESSION_FILE = path.join(SESS_DIR, `scripted_${SID}.jsonl`);
 
 fs.mkdirSync(SESS_DIR, { recursive: true });
 
-const GOALS = {
-  start: "Create data.txt and summarize.mjs",
-  constraint: "Create data.txt and summarize.mjs with max and median",
-  subproblem: "Fix row 7 of data.txt",
-  step: "Rename variables in summarize.mjs",
-  pivot: "Write README.md describing this directory",
-};
+const TASK1 = "Write numbers.txt and stats.mjs, sum now, max and median after approval";
+const TASK1_JSON = `${TASK1}, and write stats.json`;
+const TASK2 = "write the README.md draft, run example after approval";
+const SEP = process.env.FAKE_PI_SEPARATOR || "; ";
+const DECLARATIONS = [
+  { match: "创建 numbers.txt", summary: TASK1 },
+  { match: "写进 stats.json", summary: TASK1_JSON },
+  { match: "写 README.md", summary: `${TASK1_JSON}${SEP}${TASK2}` },
+];
 
-const state = { goal: null, subGoal: null };
+const state = { goal: null };
 let off = false;
 let workWritten = false;
+let turnIndex = 0;
 
 const append = (entry) => fs.appendFileSync(SESSION_FILE, `${JSON.stringify(entry)}\n`);
 const emit = (record) => process.stdout.write(`${JSON.stringify(record)}\n`);
 const stateEntry = () => append({
   type: "custom",
   customType: "agent-goal-state",
-  data: { goal: state.goal, subGoal: state.subGoal, goalSetAt: null, lastPrompt: null, lastPromptAt: null },
+  data: { goal: state.goal, lastPrompt: null, lastPromptAt: null },
 });
 const paint = (text) => {
   const lines = [`user_prompt: ${text}`];
-  if (state.goal) {
-    lines.push(`agent_goal: ${state.goal}`);
-    if (state.subGoal) lines.push(`  └─ ${state.subGoal}`);
-  }
+  if (state.goal) lines.push(`agent_goal: ${state.goal}`);
   emit({ type: "extension_ui_request", method: "setWidget", widgetKey: "agent-goal", widgetLines: lines });
 };
 
 function declarationFor(text) {
   if (MODE === "no-declaration") return null;
-  if (text.includes("创建 data.txt")) return { mode: "new", goal: GOALS.start };
-  if (text.includes("最大值和中位数")) return { mode: "rewrite", goal: GOALS.constraint };
-  if (text.includes("第 7 行")) return { mode: "expand", goal: GOALS.subproblem };
-  if (text.includes("变量名")) return { mode: "expand", goal: GOALS.step };
-  if (text.includes("改做另一件事")) return { mode: "new", goal: GOALS.pivot };
-  return null; // "add a run example" — the same outcome continues, no call
+  const hit = DECLARATIONS.find((entry) => text.includes(entry.match));
+  return hit ? hit.summary : null;
 }
 
 function writeWork() {
   if (workWritten) return;
   workWritten = true;
   fs.writeFileSync("loaded-extensions.json", JSON.stringify(argv.flatMap((arg, i) => arg === "-e" ? [argv[i + 1]] : [])));
-  fs.writeFileSync("data.txt", `${Array.from({ length: 20 }, (_, i) => i + 1).join("\n")}\n`);
-  fs.writeFileSync("summarize.mjs", "console.log('sum', 'count');\n");
+  fs.writeFileSync("numbers.txt", `${Array.from({ length: 20 }, (_, i) => i + 1).join("\n")}\n`);
+  fs.writeFileSync("stats.mjs", "console.log('sum', 'count');\n");
   fs.writeFileSync("README.md", "# work directory\n");
 }
 
@@ -87,41 +79,45 @@ function writePayload() {
     thinking: { type: "enabled" },
     reasoning_effort: "high",
     tools: declared ? [{ type: "function", function: { name: "set_goal" } }] : [],
-    messages: [{ role: "developer", content: declared ? "- set_goal: show the outcome you are working toward" : "- no goal tool here" }],
+    messages: [{ role: "developer", content: declared ? "- set_goal: show the user's still-open session goals" : "- no goal tool here" }],
   };
   fs.appendFileSync(PAYLOAD_LOG, `${JSON.stringify({ payload })}\n`);
 }
 
+function declare(goal) {
+  append({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: `goal-${turnIndex}`, name: "set_goal", arguments: { goal } }] } });
+  state.goal = goal || null;
+  stateEntry();
+}
+
 function handlePrompt(command) {
   const text = command.message || "";
-  if (MODE === "exit-mid-run" && text.includes("最大值和中位数")) process.exit(1);
+  if (MODE === "exit-mid-run" && text.includes("写进 stats.json")) process.exit(1);
   if (text.startsWith("/agent-goal off")) {
     off = true;
     // Cleared widget: the record carries no widgetLines at all.
     emit({ type: "extension_ui_request", method: "setWidget", widgetKey: "agent-goal" });
     return;
   }
-  stateEntry(); // input handler persist, before the user message exists
+
+  const firstTurn = turnIndex === 0;
+  turnIndex++;
+  // OFF: the extension's input handler does not persist while disabled.
+  if (!off) stateEntry();
   append({ type: "message", message: { role: "user", content: [{ type: "text", text }] } });
   writeWork();
 
-  const declaration = off ? null : declarationFor(text);
-  if (MODE === "provider-error" && !state.goal) {
+  const summary = off ? null : declarationFor(text);
+  if (MODE === "provider-error" && firstTurn) {
     append({ type: "message", message: { role: "assistant", content: [], stopReason: "error", errorMessage: "rate limited" } });
-  } else if (declaration) {
-    append({
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [{ type: "toolCall", id: `call-${Date.now()}`, name: "set_goal", arguments: { mode: declaration.mode, goal: declaration.goal } }],
-      },
-    });
-    if (declaration.mode === "expand" && state.goal) state.subGoal = declaration.goal;
-    else {
-      state.goal = declaration.goal;
-      state.subGoal = null;
-    }
-    stateEntry();
+  } else if (summary !== null) {
+    declare(summary);
+  } else if (!off && text.includes("读取 next.txt")) {
+    append({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "read-next", name: "read", arguments: { path: "next.txt" } }] } });
+    append({ type: "message", message: { role: "toolResult", toolCallId: "read-next", toolName: "read", content: [{ type: "text", text: "Translate the introduction into Japanese." }] } });
+    if (MODE !== "stale-discovery" && MODE !== "no-declaration") declare(`${state.goal}; translate the introduction into Japanese after confirmation`);
+  } else if (!off && MODE === "redundant" && text.includes("当前有几行")) {
+    declare(state.goal);
   } else {
     append({ type: "message", message: { role: "assistant", content: [{ type: "text", text: "done" }] } });
   }

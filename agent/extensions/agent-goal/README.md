@@ -1,6 +1,6 @@
 # agent-goal
 
-实时显示主代理当前目标（L2）+ 最后用户 prompt（L1）两行 widget。
+在编辑器上方显示主代理理解的当前会话目标或剩余待办，以及最后一条真实用户消息。扩展只负责显示，不控制任务执行。
 
 ## 为什么需要它
 
@@ -8,7 +8,7 @@
 
 ## 行为
 
-1. **指令只有一处** — 全部写在 `set_goal` 工具的 `promptGuidelines` 里（外加一行 `promptSnippet` 和 `description`）。本扩展**不返回 `systemPrompt`、不设 `forceSystemPrompt`、不写 `sections[...]`**，所以不会顶掉其他扩展对结构化 prompt 的修改。
+1. **自主更新** — `set_goal({ goal: string })` 接收一句摘要（最多 300 字符），替换整个目标行；空串清除。`description` 说明何时调用：目标首次明确或实质变化时，包括工作途中；普通追问和执行步骤不触发。`promptGuidelines` 说明如何摘要：合并新增要求，保留尚未完成的工作，移除已完成、取消或被替代的目标。扩展不推断目标、不强制调用，也不覆盖 system prompt。
 2. **显示** — widget 两行灰字 `user_prompt` / `agent_goal`。footer 不写状态行：同一句目标若再占 footer，会挤掉其他扩展的开关（footer 状态只有一行、按 key 排序、超宽从尾部截断）。无 timer、无循环、无后台任务、无子代理，纯事件驱动。
 3. **持久化** — session entry（`agent-goal-state`，JSONL），随 session 走而非全局文件（与 pi-goal 相同模式）。
 4. **切换 branch** — `session_tree` 时先清空本地状态再从**当前分支**重读；切到没有目标条目的 branch 就显示空，不沿用上一条 branch 的残留（`getEntries()` 含全部 branch，所以只扫 `getBranch()`）。
@@ -26,9 +26,8 @@
 ## 成本
 
 - **不主动调用模型**：扩展自身不发起任何模型请求。
-- **prompt 侧固定占用**：启用且有 UI 时，按当前 guideline/snippet 文本计新增 **1687 字符**——`<rules>` 中 5 条 guideline 渲染后共 1592 字符（含 `- ` 前缀）+ `<tools>` 中 `- set_goal: <snippet>` 一行 95 字符。token 数取决于模型 tokenizer，这里不给承诺值；按 4 字符/token 粗估约 420 token（仅估算）。关闭或无 UI 时为 0。
-- **调度成本（预期内）**：`set_goal` 由模型按需调度。guideline 允许它和本轮第一个工具调用同一次响应发出，也允许在无法合并时单独发一次；只要求不要仅为刷新显示而调用它。独占一次响应会多一次模型往返，这是该设计的已知成本，显示层不做补偿。
-- **依赖模型遵循 guideline**：是否声明、选哪个 mode 由模型决定，显示层不做补偿性推断。`run-acceptance.cjs` 是测这件事的地方：它按每轮 `agent_settled` 后的累计状态判断，并把 provider 报错、没有 provider 响应、请求未带指定 model/thinking 的运行判为 invalid（单独报告，不重试）；真正跑完却断言失败的行为失败不会被重试到绿。通过与否取决于被测模型是否遵循 guideline，本扩展不承诺通过率。
+- **固定输入**：启用且有 UI 时，工具声明（含参数 schema 和 provider 外壳）、snippet 和规则共 **735 字符**，按 chars/4 粗估约 **184 token**；带 `strict: false` 时约 188 token。关闭或无 UI 时不再发送这些固定文本。
+- **调度成本**：模型自主调用。独占一次响应时会多一次模型往返；漏调时摘要可能陈旧，扩展不追加请求或推断目标。
 
 ## 配置
 
@@ -47,13 +46,13 @@
 
 | 文件 | 作用 |
 |---|---|
-| `index.ts` | 注册入口，含状态机、widget 渲染、`prepareLoadout` 可见性开关、`/agent-goal` 命令 |
+| `index.ts` | 单参数工具、摘要存储与 widget、`prepareLoadout` 可见性开关、`/agent-goal` 命令 |
 | `../../tests/agent-goal-state.test.mjs` | 状态机单测（mock ExtensionAPI） |
 | `../../tests/agent-goal-runtime.test.mjs` | 真实 `AgentSession` / `ExtensionRunner` 回归：不强制 system prompt、OFF/headless 可见性、同 run 内 OFF、其他工具不受影响、codemode `on`/`only` 不泄漏 |
-| `../../evals/agent-goal/run-eval.cjs` | 真实模型端到端 eval：8 个脚本化场景，RPC 模式断言 widget + footer 无状态写入 + 状态层 + provider payload（tools / top-level `system` / `system` / `developer` 全扫） |
+| `../../evals/agent-goal/run-eval.cjs` | 真实模型端到端 eval：6 个脚本化场景，RPC 模式断言 widget + footer 无状态写入 + 状态层 + provider payload（tools / top-level `system` / `system` / `developer` 全扫） |
 | `../../evals/agent-goal/lib/goal-evidence.cjs` | 两个 eval 共用的读取层：session 每轮快照、`set_goal` 调用、provider 错误、payload 指令面与 model/thinking 校验、唯一证据目录 |
-| `../../tests/agent-goal-eval-harness.test.mjs` | 上述读取层的确定性 fixture：无调用的轮次不算丢目标、父目标必须与上一轮逐字一致、developer 指令面可检出、invalid 与行为失败分离 |
+| `../../tests/agent-goal-eval-harness.test.mjs` | 上述读取层的确定性 fixture：保留累计摘要、检查漏报与越界参数、developer 指令面可检出、invalid 与行为失败分离 |
 | `../../tests/agent-goal-acceptance-script.test.mjs` | 用 `tests/fixtures/fake-pi` 驱动 `run-acceptance.cjs` 本身：跨轮状态、唯一证据目录、provider 报错判 invalid、不声明判行为失败 |
-| `../../evals/agent-goal/run-acceptance.cjs` | 真实会话验收：**不裁剪工具集**的 agent 真实干活，6 个场景断言目标追踪（start/新增约束/子问题/纯步骤/pivot/同 outcome 延续）+ OFF |
+| `../../evals/agent-goal/run-acceptance.cjs` | 真实会话验收：**不裁剪工具集**的 agent 真实干活，检查首次目标、补充要求、并行待办、普通追问不刷新、同轮发现新待办后更新，以及 OFF 隔离；不要求固定标点或措辞 |
 
 验收默认从当前 checkout 加载扩展。对照相同工具契约的指令候选时，可用 `node evals/agent-goal/run-acceptance.cjs --extension /path/to/candidate.ts --thinking high`，无需替换已安装版本。脚本启动时打印证据目录，`result.json` 随用户轮次更新；若被外部中止，`status: "running"` 表示证据未完成，不是验收结论。

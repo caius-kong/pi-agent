@@ -9,10 +9,16 @@
  *   2. STATE   — the session JSONL: the `set_goal` call sequence and the last
  *      `agent-goal-state` custom entry.
  *
+ * The user messages are the whole prompt: no eval preamble, nothing that names
+ * set_goal and nothing that tells the model when the summary should change. Only
+ * `set_goal` is declared here (`--no-builtin-tools`), so this is the cheap
+ * scripted half of the check; `run-acceptance.cjs` is the one that runs a real
+ * agent with its own tools.
+ *
  * Behavior scenarios run in RPC mode (`pi --mode rpc`): `ctx.hasUI` is true there,
- * so `set_goal` is declared and the widget/status calls really happen. Print mode
- * (`-p`) has no UI, which is now its own scenario: the tool must be invisible to
- * the provider there.
+ * so `set_goal` is declared and the widget calls really happen. Print mode (`-p`)
+ * has no UI, which is its own scenario: the tool must be invisible to the
+ * provider there.
  *
  * A generated probe extension records every provider payload
  * (`before_provider_request`), so "the provider never saw set_goal" is asserted on
@@ -29,11 +35,11 @@
  * requested model/thinking level). Invalid runs are reported separately and are
  * not retried to green; a red behavior assertion is never retried either.
  *
- * Usage: node run-eval.cjs [--keep] [--scenario s1,s3] [--model <id>] [--thinking <level>]
+ * Usage: node run-eval.cjs [--keep] [--scenario e1,e3] [--model <id>] [--thinking <level>]
  *   --keep      keep the evidence directory even when everything passes
  *   --scenario  comma-separated scenario ids (default: all)
  *   --model     override the model id (default: $AG_EVAL_MODEL or the cheap default)
- *   --thinking  override the thinking level (default: "low")
+ *   --thinking  override the thinking level (default: "high")
  * Exit: 0 all scenarios pass · 1 behavior failure · 2 invalid run(s) only.
  */
 
@@ -51,7 +57,7 @@ const {
   evidenceDir,
 } = require("./lib/goal-evidence.cjs");
 
-const EXT = path.join(process.env.HOME, ".pi/agent/extensions/agent-goal/index.ts");
+const EXT = path.join(__dirname, "../../agent/extensions/agent-goal/index.ts");
 const ROOT = evidenceDir("ag-eval");
 const SESS_DIR = path.join(ROOT, "sessions");
 const WORK_DIR = path.join(ROOT, "work");
@@ -61,7 +67,7 @@ const argOf = (name) => {
   const index = process.argv.indexOf(name);
   return index !== -1 ? process.argv[index + 1] : undefined;
 };
-const THINKING = argOf("--thinking") || "low";
+const THINKING = argOf("--thinking") || "high";
 
 // Default model for the eval: the cheap flash model. Override with
 // AG_EVAL_MODELS='[...]' or --model when a different model needs checking.
@@ -80,10 +86,7 @@ let only = null;
 const modelArg = argOf("--model");
 const MODELS_TO_RUN = modelArg ? [modelArg] : MODELS;
 
-const PREAMBLE =
-  "You are simulating a working session on a fictional project; your only tool is set_goal. " +
-  "Use set_goal per its guidelines when the displayed goal should change, then reply with one short line. " +
-  "Do not explore files or run code.";
+const START = "We need to add CSV export to our app. Go.";
 
 // ── probe extension (records the provider payload) ────────────────────────
 const PROBE_SOURCE = `
@@ -183,21 +186,24 @@ function widgetStates(records) {
     .filter((r) => r.type === "extension_ui_request" && r.method === "setWidget" && r.widgetKey === "agent-goal")
     .map((r) => stripAnsiDeep(r.widgetLines));
 }
+function goalLines(records) {
+  return widgetStates(records).flat().filter((l) => typeof l === "string" && l.startsWith("agent_goal:"));
+}
 function footerStatusWrites(records) {
   return records.filter(
     (r) => r.type === "extension_ui_request" && r.method === "setStatus" && r.statusKey === "agent-status",
   );
 }
 const lastOf = (list) => (list.length ? list[list.length - 1] : undefined);
+const summaryOf = (state) => state?.goal ?? "";
 
 const PASS = (label) => { console.log(`  ✓ ${label}`); return true; };
 const FAIL = (label) => { console.log(`  ✗ ${label}`); return false; };
 
 // ── RPC client ────────────────────────────────────────────────────────────
 
-function rpcArgs(scenarioId, model, payloadLog) {
+function commonArgs(scenarioId) {
   return [
-    "--mode", "rpc",
     "--session-dir", SESS_DIR,
     "--session-id", scenarioId,
     "--no-extensions",
@@ -210,14 +216,13 @@ function rpcArgs(scenarioId, model, payloadLog) {
     "--tools", "set_goal",
     "--approve",
     "--thinking", THINKING,
-    "--model", model,
   ];
 }
 
 function startRpc(scenarioId, model) {
   const payloadLog = path.join(PAYLOAD_DIR, `${scenarioId}.jsonl`);
   fs.rmSync(payloadLog, { force: true });
-  const proc = spawn("pi", rpcArgs(scenarioId, model, payloadLog), {
+  const proc = spawn("pi", ["--mode", "rpc", ...commonArgs(scenarioId), "--model", model], {
     cwd: WORK_DIR,
     env: { ...process.env, PI_NO_TELEMETRY: "1", AG_EVAL_PAYLOAD_LOG: payloadLog },
     stdio: ["pipe", "pipe", "pipe"],
@@ -304,158 +309,94 @@ function startRpc(scenarioId, model) {
 
 const scenarios = [
   {
-    id: "s1-first-prompt",
-    turns: [PREAMBLE + "\nUser: We need to add CSV export to our app. Go."],
-    check({ records }) {
+    id: "e1-first-prompt",
+    turns: [START],
+    check({ records, state }) {
       let ok = true;
       const widgets = widgetStates(records);
-      const promptLine = widgets.flat().filter((l) => typeof l === "string").find((l) => l.startsWith("user_prompt:"));
+      const promptLine = widgets.flat().find((l) => typeof l === "string" && l.startsWith("user_prompt:"));
       ok = (promptLine && /csv export/i.test(promptLine)
         ? PASS(`display: widget shows "${promptLine.slice(0, 60)}"`)
-        : FAIL(`display: widget shows the user_prompt line (got ${JSON.stringify(widgets)}`)) && ok;
-      return ok;
-    },
-  },
-
-  {
-    id: "s2-new-start",
-    turns: [PREAMBLE + "\nUser: We need to add CSV export to our app. Go."],
-    check({ records, state }) {
-      let ok = true;
-      const widgets = widgetStates(records);
-      const goalLine = widgets.flat().filter((l) => typeof l === "string").find((l) => l.startsWith("agent_goal:"));
-      ok = (goalLine && /csv|export/i.test(goalLine)
-        ? PASS(`display: agent_goal line "${goalLine.slice(0, 60)}"`)
-        : FAIL(`display: agent_goal line for the new outcome (got ${JSON.stringify(widgets.slice(-1))})`)) && ok;
+        : FAIL(`display: widget shows the user_prompt line (got ${JSON.stringify(widgets)})`)) && ok;
+      const lines = goalLines(records);
+      ok = (lines.length > 0 && /csv|export/i.test(lines[lines.length - 1])
+        ? PASS(`display: agent_goal line "${lines[lines.length - 1].slice(0, 60)}"`)
+        : FAIL(`display: agent_goal line for the task (got ${JSON.stringify(lines)})`)) && ok;
       ok = (footerStatusWrites(records).length === 0
         ? PASS("display: footer status line untouched (the widget is the only surface)")
-        : FAIL(`display: no agent-status footer writes (got ${JSON.stringify(footerStatusWrites(records))})`)) && ok;
-      const first = state.goalCalls[0];
-      ok = (first && first.mode === "new"
-        ? PASS(`state: first set_goal uses mode:"new"`)
-        : FAIL(`state: first set_goal mode is new (got ${first ? first.mode : "no call"})`)) && ok;
-      ok = (state.finalState && /csv|export/i.test(state.finalState.goal || "")
-        ? PASS(`state: persisted goal "${state.finalState.goal.slice(0, 50)}"`)
-        : FAIL(`state: persisted goal anchored on csv/export (got ${JSON.stringify(state.finalState)})`)) && ok;
+        : FAIL(`display: no agent-status footer writes (got ${footerStatusWrites(records).length})`)) && ok;
+      ok = (state.goalCalls.length > 0 && /csv|export/i.test(summaryOf(state.finalState))
+        ? PASS(`state: persisted summary "${summaryOf(state.finalState).slice(0, 50)}"`)
+        : FAIL(`state: persisted summary anchored on csv/export (got ${JSON.stringify(state.finalState)})`)) && ok;
       return ok;
     },
   },
 
   {
-    id: "s3-rewrite",
-    turns: [
-      PREAMBLE + "\nUser: We need to add CSV export to our app. Go.",
-      "User: Also, the export must now additionally support ISO-8601 timestamps and a BOM for Excel — add that to the goal.",
-    ],
+    id: "e2-supplement",
+    turns: [START, "Also, the export must additionally support ISO-8601 timestamps and a BOM for Excel — add that to the goal."],
     check({ records, state }) {
       let ok = true;
-      const [first, second] = state.goalCalls;
-      if (!first) return FAIL("state: no initial set_goal call");
-      ok = (second && second.mode === "rewrite"
-        ? PASS(`state: 2nd call mode:"rewrite"`)
-        : FAIL(`state: 2nd call mode is rewrite (got ${second ? second.mode : "no call"})`)) && ok;
-      ok = (second && /iso-?8601|bom|excel/i.test(second.goal)
-        ? PASS(`state: rewritten goal "${second.goal.slice(0, 60)}"`)
-        : FAIL(`state: rewritten goal mentions the new constraint (got ${second ? second.goal : ""})`)) && ok;
-      ok = (state.finalState && /csv|export/i.test(state.finalState.goal || "")
-        ? PASS(`state: core outcome kept ("${state.finalState.goal.slice(0, 50)}")`)
-        : FAIL(`state: core outcome kept (got ${JSON.stringify(state.finalState)})`)) && ok;
-      const widgets = widgetStates(records);
-      const goalLines = widgets.flat().filter((l) => typeof l === "string" && l.startsWith("agent_goal:"));
-      ok = (goalLines.length >= 2
-        ? PASS(`display: goal line was replaced (${goalLines.length} distinct renders)`)
-        : FAIL(`display: goal line was replaced (got ${JSON.stringify(goalLines)})`)) && ok;
+      const summary = summaryOf(state.finalState);
+      ok = (state.goalCalls.length >= 2
+        ? PASS(`state: ${state.goalCalls.length} declarations across the two turns`)
+        : FAIL(`state: a second declaration after the added constraint (got ${state.goalCalls.length})`)) && ok;
+      ok = (/iso-?8601|bom|excel/i.test(summary)
+        ? PASS(`state: the added constraint is in the summary ("${summary.slice(0, 60)}")`)
+        : FAIL(`state: the added constraint is in the summary (got "${summary}")`)) && ok;
+      ok = (/csv|export/i.test(summary)
+        ? PASS("state: the core outcome is still there")
+        : FAIL(`state: the core outcome is still there (got "${summary}")`)) && ok;
+      const distinct = new Set(goalLines(records));
+      ok = (distinct.size >= 2
+        ? PASS(`display: goal line replaced (${distinct.size} distinct renders)`)
+        : FAIL(`display: goal line replaced (got ${JSON.stringify([...distinct])})`)) && ok;
       return ok;
     },
   },
 
   {
-    id: "s4-expand",
-    turns: [
-      PREAMBLE + "\nUser: We need to add CSV export to our app. Go.",
-      "User: While working on it I realize we first need to fix the date-column formatting — a sub-problem of the export. Get on that.",
-    ],
-    check({ records, state }) {
-      let ok = true;
-      const [first, second] = state.goalCalls;
-      if (!first) return FAIL("state: no initial set_goal call");
-      if (!second) ok = PASS("state: 2nd turn made no goal call (allowed)") && ok;
-      else if (second.mode === "expand") ok = PASS(`state: 2nd call mode:"expand"`) && ok;
-      else ok = FAIL(`state: a sub-problem must not replace the goal; got mode:"${second.mode}" goal="${second.goal}"`) && ok;
-      ok = (state.finalState && /csv|export/i.test(state.finalState.goal || "")
-        ? PASS(`state: parent goal unchanged ("${state.finalState.goal.slice(0, 50)}")`)
-        : FAIL(`state: parent goal unchanged (got ${JSON.stringify(state.finalState)})`)) && ok;
-      if (second && second.mode === "expand") {
-        ok = (state.finalState && /date/i.test(state.finalState.subGoal || "")
-          ? PASS(`state: nested focus "${state.finalState.subGoal}"`)
-          : FAIL(`state: nested focus mentions the date sub-problem (got ${JSON.stringify(state.finalState)})`)) && ok;
-        const nested = widgetStates(records).flat().filter((l) => typeof l === "string" && l.includes("└─"));
-        ok = (nested.length > 0
-          ? PASS(`display: nested row "${nested[nested.length - 1].trim().slice(0, 50)}"`)
-          : FAIL(`display: nested └─ row appears`)) && ok;
-      }
-      return ok;
-    },
-  },
-
-  {
-    id: "s5-pivot",
-    turns: [
-      PREAMBLE + "\nUser: We need to add CSV export to our app. Go.",
-      "User: Actually, drop the export feature entirely. We now need to build a CLI arg parser instead. Update the goal.",
-    ],
-    check({ records, state }) {
-      let ok = true;
-      const [first, second] = state.goalCalls;
-      if (!first) return FAIL("state: no initial set_goal call");
-      ok = (second && second.mode === "new"
-        ? PASS(`state: pivot uses mode:"new"`)
-        : FAIL(`state: pivot uses mode:"new" (got ${second ? second.mode : "no call"})`)) && ok;
-      ok = (second && /cli|arg\s*parser/i.test(second.goal)
-        ? PASS(`state: pivoted goal "${second.goal.slice(0, 60)}"`)
-        : FAIL(`state: pivoted goal mentions cli/arg parser (got ${second ? second.goal : ""})`)) && ok;
-      // The outcome must no longer be the export; naming the abandoned feature in
-      // passing ("CSV export dropped") is fine, but a goal that keeps pursuing it
-      // ("build a CLI parser, keep the CSV export too") is not.
-      const stillExport = (goal) =>
-        /add(ing)? csv export|export to our app|keep[^.]{0,24}(csv|export)/i.test(goal || "");
-      ok = (state.finalState && !stillExport(state.finalState.goal) && /cli|arg\s*parser/i.test(state.finalState.goal || "")
-        ? PASS(`state: old outcome replaced ("${(state.finalState.goal || "").slice(0, 50)}")`)
-        : FAIL(`state: old outcome replaced (got ${JSON.stringify(state.finalState)})`)) && ok;
-      const goalLines = widgetStates(records).flat().filter((l) => typeof l === "string" && l.startsWith("agent_goal:"));
-      const lastGoalLine = goalLines[goalLines.length - 1] ?? "";
-      ok = (goalLines.length > 0 && !stillExport(lastGoalLine) && /cli|arg\s*parser/i.test(lastGoalLine)
-        ? PASS("display: last agent_goal line states the new outcome")
-        : FAIL(`display: last agent_goal line states the new outcome (got ${JSON.stringify(goalLines.slice(-1))})`)) && ok;
-      return ok;
-    },
-  },
-
-  {
-    id: "s6-step",
-    turns: [
-      PREAMBLE + "\nUser: We need to add CSV export to our app. Go.",
-      "User: Create the utils module for the escaping logic (just a step of the goal).",
-    ],
+    id: "e3-second-goal",
+    turns: [START, "Separately, write a README for the project. Neither task is finished yet."],
     check({ state }) {
       let ok = true;
-      const [first, second] = state.goalCalls;
-      if (!first) return FAIL("state: no initial set_goal call");
-      if (!second) ok = PASS("state: a step made no goal call") && ok;
-      else if (second.mode === "expand") ok = PASS("state: a step call was an expand (allowed, not required)") && ok;
-      else ok = FAIL(`state: a mere step must not rewrite the goal; got mode:"${second.mode}"`) && ok;
+      const summary = summaryOf(state.finalState);
+      ok = (/(csv|export)/i.test(summary) && /readme|documentation/i.test(summary)
+        ? PASS(`state: both goals are represented ("${summary}")`)
+        : FAIL(`state: both goals should be represented (got "${summary}")`)) && ok;
       return ok;
     },
   },
 
   {
-    id: "s7-toggle",
+    id: "e4-finished",
+    turns: [START, "The CSV export is finished, so drop it from the goal. Nothing else is open."],
+    check({ records, state }) {
+      let ok = true;
+      const lastCall = lastOf(state.goalCalls);
+      ok = (lastCall && lastCall.goal === ""
+        ? PASS("state: the last declaration is an empty goal")
+        : FAIL(`state: an empty goal once nothing is left (got ${JSON.stringify(lastCall)})`)) && ok;
+      ok = (summaryOf(state.finalState) === ""
+        ? PASS("state: no goal left")
+        : FAIL(`state: no goal left (got "${summaryOf(state.finalState)}")`)) && ok;
+      const lastWidget = lastOf(widgetStates(records));
+      const stillShown = (lastWidget ?? []).some((l) => typeof l === "string" && l.startsWith("agent_goal:"));
+      ok = (!stillShown
+        ? PASS("display: the goal entry is gone from the widget")
+        : FAIL(`display: the goal entry is gone (got ${JSON.stringify(lastWidget)})`)) && ok;
+      return ok;
+    },
+  },
+
+  {
+    id: "e5-toggle",
     turns: [
-      PREAMBLE + "\nUser: We need to add CSV export to our app. Go.",
+      START,
       "/agent-goal off",
-      "User: keep going, just a step.",
+      "keep going, just a step.",
       "/agent-goal on",
-      "User: Now continue with the export work.",
+      "Now continue with the export work.",
     ],
     check({ records, turnPayloads }) {
       let ok = true;
@@ -482,12 +423,12 @@ const scenarios = [
   },
 
   {
-    id: "s8-headless",
+    id: "e6-headless",
     headless: true,
-    // No simulation preamble here: it names the tool, and a prompt that names a
-    // tool is not evidence about what the provider declared. A neutral task prompt
-    // is what a real headless run looks like.
-    turns: ["We need to add CSV export to our app. Go."],
+    // No preamble here either: a prompt that names a tool is not evidence about
+    // what the provider declared. A neutral task prompt is what a real headless
+    // run looks like.
+    turns: [START],
     check({ state, payloads, headless }) {
       let ok = true;
       ok = (headless.status === 0
@@ -530,12 +471,7 @@ async function runRpcScenario(sc, model) {
     assertModelUsable(state);
     const payloads = readPayloads(sc.id);
     assertRequestConfig(payloads, model);
-    return {
-      records: rpc.records,
-      payloads,
-      turnPayloads,
-      state,
-    };
+    return { records: rpc.records, payloads, turnPayloads, state };
   } finally {
     await rpc.close();
   }
@@ -547,18 +483,7 @@ function runHeadlessScenario(sc, model) {
   fs.rmSync(payloadLog, { force: true });
   const args = [
     "-p",
-    "--session-dir", SESS_DIR,
-    "--session-id", sc.id,
-    "--no-extensions",
-    "--no-skills",
-    "--no-context-files",
-    "--no-themes",
-    "--no-builtin-tools",
-    "-e", EXT,
-    "-e", PROBE,
-    "--tools", "set_goal",
-    "--approve",
-    "--thinking", THINKING,
+    ...commonArgs(sc.id),
     "--model", model,
     "--",
   ];
