@@ -26,7 +26,7 @@
             "image"
           ],
           "contextWindow": 131072,
-          "maxTokens": 131072,
+          "maxTokens": 65536,
           "thinkingLevelMap": {
             "off": "none",
             "low": "low",
@@ -56,7 +56,7 @@
             "image"
           ],
           "contextWindow": 262144,
-          "maxTokens": 262144
+          "maxTokens": 131072
         },
         {
           "api": "openai-completions",
@@ -325,7 +325,7 @@
             "text"
           ],
           "contextWindow": 1048576,
-          "maxTokens": 65536,
+          "maxTokens": 131072,
           "thinkingLevelMap": {
             "off": null,
             "low": "low",
@@ -356,8 +356,8 @@
             "text",
             "image"
           ],
-          "contextWindow": 1050000,
-          "maxTokens": 131100,
+          "contextWindow": 1048576,
+          "maxTokens": 131072,
           "thinkingLevelMap": {
             "off": null,
             "low": "low",
@@ -387,7 +387,7 @@
             "image"
           ],
           "contextWindow": 1048576,
-          "maxTokens": 943718,
+          "maxTokens": 131072,
           "thinkingLevelMap": {
             "off": null,
             "low": "low",
@@ -449,7 +449,7 @@
             "text"
           ],
           "contextWindow": 1048576,
-          "maxTokens": 16384,
+          "maxTokens": 384000,
           "thinkingLevelMap": {
             "off": "none",
             "low": "low",
@@ -481,7 +481,7 @@
             "image"
           ],
           "contextWindow": 1048576,
-          "maxTokens": 131072,
+          "maxTokens": 384000,
           "thinkingLevelMap": {
             "off": "none",
             "low": "low",
@@ -511,7 +511,7 @@
             "text",
             "image"
           ],
-          "contextWindow": 262100,
+          "contextWindow": 262144,
           "maxTokens": 131072,
           "thinkingLevelMap": {
             "off": "none",
