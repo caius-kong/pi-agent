@@ -2,7 +2,7 @@
 description: Deep research a GitHub project — 业界口碑 gate first (adoption, criticism, last 30 days), details only if it earns them
 argument-hint: "<github-repo-url>"
 ---
-请深入研究这个项目，输出一份报告。
+请深入研究这个项目，输出一份报告（直接输出，不写文件）。
 
 # 第一章必须是「业界口碑」
 先回答"业界是否认可它"，再决定报告重心。证据取自：使用与采用信号（star/fork/下载量/依赖方/生产案例）、外部评价与批评、近 30 天社区动态（call skill:last30days）。
