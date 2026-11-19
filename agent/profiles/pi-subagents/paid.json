@@ -6,7 +6,7 @@
     "timeoutMs": 2700000,
     "agentOverrides": {
       "oracle": {
-        "model": "trendmicro/gpt-6.1-sol",
+        "model": "trendmicro/gpt-6.2-sol",
         "thinking": "high"
       },
       "worker": {
@@ -26,7 +26,7 @@
         "thinking": "high"
       },
       "plan": {
-        "model": "trendmicro/gpt-6.1-sol",
+        "model": "trendmicro/gpt-6.2-sol",
         "thinking": "medium"
       }
     }

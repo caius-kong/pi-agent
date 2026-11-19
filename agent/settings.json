@@ -5,7 +5,7 @@
   "defaultModel": "deepseek-v4.1-flash",
   "defaultThinkingLevel": "high",
   "modelThinkingLevels": {
-    "trendmicro/gpt-6.1-sol": "medium"
+    "trendmicro/gpt-6.2-sol": "medium"
   },
   "packages": [
     "npm:pi-subagents",
@@ -32,7 +32,7 @@
     "timeoutMs": 2700000,
     "agentOverrides": {
       "oracle": {
-        "model": "trendmicro/gpt-6.1-sol",
+        "model": "trendmicro/gpt-6.2-sol",
         "thinking": "high"
       },
       "worker": {
@@ -52,7 +52,7 @@
         "thinking": "high"
       },
       "plan": {
-        "model": "trendmicro/gpt-6.1-sol",
+        "model": "trendmicro/gpt-6.2-sol",
         "thinking": "medium"
       }
     }

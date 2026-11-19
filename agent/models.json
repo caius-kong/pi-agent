@@ -246,14 +246,14 @@
             "supportsStore": false,
             "supportsReasoningEffort": true
           },
-          "id": "gpt-6.1-sol",
-          "name": "gpt-6.1-sol",
+          "id": "gpt-6.2-sol",
+          "name": "gpt-6.2-sol",
           "reasoning": true,
           "input": [
             "text",
             "image"
           ],
-          "contextWindow": 1050000,
+          "contextWindow": 922000,
           "maxTokens": 128000,
           "thinkingLevelMap": {
             "off": null,
