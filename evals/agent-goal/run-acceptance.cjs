@@ -25,7 +25,7 @@
  * reported as goal-tracking results. A turn that really ran and still failed an
  * assertion is a BEHAVIOR failure (exit 1); it is not retried either.
  *
- * Usage: node run-acceptance.cjs [--model <provider/model>] [--thinking <level>]
+ * Usage: node run-acceptance.cjs [--extension <file>] [--model <provider/model>] [--thinking <level>]
  * Exit: 0 every tracking assertion holds · 1 behavior failure · 2 invalid run.
  */
 const { spawn } = require("node:child_process");
@@ -43,7 +43,6 @@ const {
   writeJson,
 } = require("./lib/goal-evidence.cjs");
 
-const EXT = path.join(process.env.HOME, ".pi/agent/extensions/agent-goal/index.ts");
 const ROOT = evidenceDir("ag-accept");
 const PROBE = path.join(ROOT, "probe.ts");
 const SESS_DIR = path.join(ROOT, "sessions");
@@ -54,12 +53,14 @@ const arg = (name) => {
   const i = process.argv.indexOf(name);
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : undefined;
 };
+const EXT = path.resolve(arg("--extension") || path.join(__dirname, "../../agent/extensions/agent-goal/index.ts"));
 const MODEL = arg("--model") || process.env.ACC_MODEL || "trendmicro/deepseek-v4.1-flash";
 const THINKING = arg("--thinking") || process.env.ACC_THINKING || "high";
 
 const PASS = (m) => { console.log(`  ✓ ${m}`); return true; };
 const FAIL = (m) => { console.log(`  ✗ ${m}`); return false; };
 
+console.log(`evidence directory: ${ROOT}`);
 fs.mkdirSync(SESS_DIR, { recursive: true });
 fs.mkdirSync(WORK, { recursive: true });
 fs.writeFileSync(PROBE, `
@@ -229,22 +230,29 @@ function evidenceOf(id, turnEvidence) {
 
 (async () => {
   let ok = true;
-  const evidence = { model: MODEL, thinking: THINKING, root: ROOT, turns: [], checks: [], off: null };
+  const evidence = { model: MODEL, thinking: THINKING, extension: EXT, root: ROOT, turns: [], checks: [], off: null, status: "running" };
+  const save = () => writeJson(path.join(ROOT, "result.json"), evidence);
   const finish = (code) => {
     evidence.ok = code === 0;
-    writeJson(path.join(ROOT, "result.json"), evidence);
+    evidence.status = code === 0 ? "passed" : code === 1 ? "failed" : "invalid";
+    save();
     console.log(`\nevidence: ${ROOT}`);
     try { proc.kill("SIGTERM"); } catch {}
     process.exit(code);
   };
 
   try {
+    save();
     console.log(`== goal-tracking acceptance · ${MODEL} @${THINKING} ==`);
     const turnEvidence = [];
     for (const t of TURNS) {
+      evidence.pendingTurn = t.id;
+      save();
       const snapshot = await runTurn(t.say);
       turnEvidence.push(snapshot);
       evidence.turns.push(evidenceOf(t.id, snapshot));
+      delete evidence.pendingTurn;
+      save();
     }
 
     console.log("\n-- what the model declared, per user turn --");
@@ -331,9 +339,6 @@ function evidenceOf(id, turnEvidence) {
   } catch (e) {
     console.error(`\n✗ acceptance threw: ${e.message}`);
     evidence.error = e.message;
-    writeJson(path.join(ROOT, "result.json"), evidence);
-    console.error(`evidence: ${ROOT}`);
-    try { proc.kill("SIGTERM"); } catch {}
-    process.exit(2);
+    finish(2);
   }
 })();

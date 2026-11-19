@@ -28,8 +28,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(__dirname, "..", "evals", "agent-goal", "run-acceptance.cjs");
 const FAKE_BIN = path.join(__dirname, "fixtures", "fake-pi");
 
-function runAcceptance(env = {}) {
-  const result = spawnSync(process.execPath, [SCRIPT], {
+function runAcceptance(env = {}, args = []) {
+  const result = spawnSync(process.execPath, [SCRIPT, ...args], {
     encoding: "utf8",
     timeout: 120000,
     env: {
@@ -85,6 +85,20 @@ test("each acceptance run gets its own evidence directory", () => {
   }
 });
 
+test("an explicit candidate path reaches Pi and is recorded in the evidence", () => {
+  const candidate = path.join(__dirname, "fixtures", "candidate.ts"); // Fake Pi only records argv.
+  const run = runAcceptance({}, ["--extension", candidate]);
+  try {
+    assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+    assert.equal(run.evidence.extension, candidate);
+    assert.equal(run.evidence.status, "passed");
+    assert.equal(run.evidence.pendingTurn, undefined);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(run.evidenceDir, "work", "loaded-extensions.json"), "utf8"))[0], candidate);
+  } finally {
+    if (run.evidenceDir) fs.rmSync(run.evidenceDir, { recursive: true, force: true });
+  }
+});
+
 test("a provider error makes the run invalid, not a goal-tracking failure", () => {
   const run = runAcceptance({ FAKE_PI_MODE: "provider-error" });
   try {
@@ -92,7 +106,21 @@ test("a provider error makes the run invalid, not a goal-tracking failure", () =
     assert.match(run.stdout, /ACCEPTANCE INVALID/);
     assert.doesNotMatch(run.stdout, /GOAL TRACKING (ACCEPTED|FAILED)/);
     assert.ok(run.evidenceDir, "an invalid run keeps its evidence");
+    assert.equal(run.evidence.status, "invalid");
     assert.equal(run.evidence.turns[0].providerErrors[0], "rate limited");
+  } finally {
+    if (run.evidenceDir) fs.rmSync(run.evidenceDir, { recursive: true, force: true });
+  }
+});
+
+test("an interrupted Pi run keeps the completed turns and the pending turn", () => {
+  const run = runAcceptance({ FAKE_PI_MODE: "exit-mid-run" });
+  try {
+    assert.equal(run.status, 2, `${run.stdout}\n${run.stderr}`);
+    assert.match(run.stdout, /evidence directory: /);
+    assert.equal(run.evidence.status, "invalid");
+    assert.deepEqual(run.evidence.turns.map((turn) => turn.id), ["start"]);
+    assert.equal(run.evidence.pendingTurn, "constraint");
   } finally {
     if (run.evidenceDir) fs.rmSync(run.evidenceDir, { recursive: true, force: true });
   }

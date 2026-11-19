@@ -55,3 +55,5 @@
 | `../../tests/agent-goal-eval-harness.test.mjs` | 上述读取层的确定性 fixture：无调用的轮次不算丢目标、父目标必须与上一轮逐字一致、developer 指令面可检出、invalid 与行为失败分离 |
 | `../../tests/agent-goal-acceptance-script.test.mjs` | 用 `tests/fixtures/fake-pi` 驱动 `run-acceptance.cjs` 本身：跨轮状态、唯一证据目录、provider 报错判 invalid、不声明判行为失败 |
 | `../../evals/agent-goal/run-acceptance.cjs` | 真实会话验收：**不裁剪工具集**的 agent 真实干活，6 个场景断言目标追踪（start/新增约束/子问题/纯步骤/pivot/同 outcome 延续）+ OFF |
+
+验收默认从当前 checkout 加载扩展。对照相同工具契约的指令候选时，可用 `node evals/agent-goal/run-acceptance.cjs --extension /path/to/candidate.ts --thinking high`，无需替换已安装版本。脚本启动时打印证据目录，`result.json` 随用户轮次更新；若被外部中止，`status: "running"` 表示证据未完成，不是验收结论。

@@ -73,6 +73,7 @@ function declarationFor(text) {
 function writeWork() {
   if (workWritten) return;
   workWritten = true;
+  fs.writeFileSync("loaded-extensions.json", JSON.stringify(argv.flatMap((arg, i) => arg === "-e" ? [argv[i + 1]] : [])));
   fs.writeFileSync("data.txt", `${Array.from({ length: 20 }, (_, i) => i + 1).join("\n")}\n`);
   fs.writeFileSync("summarize.mjs", "console.log('sum', 'count');\n");
   fs.writeFileSync("README.md", "# work directory\n");
@@ -93,6 +94,7 @@ function writePayload() {
 
 function handlePrompt(command) {
   const text = command.message || "";
+  if (MODE === "exit-mid-run" && text.includes("最大值和中位数")) process.exit(1);
   if (text.startsWith("/agent-goal off")) {
     off = true;
     // Cleared widget: the record carries no widgetLines at all.
