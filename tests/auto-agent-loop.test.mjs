@@ -346,8 +346,16 @@ test("configuration lives in settings.json under auto-agent-loop and rejects bad
   assert.equal(DEFAULT_CONFIG.timeoutMs, 300_000);
   assert.deepEqual(configFromSettings({}), DEFAULT_CONFIG);
   assert.deepEqual(configFromSettings({ "auto-agent-loop": { "flash-model": "custom/flash", "jev-model": "custom/jev", "max-loop": 6 } }),
-    { flash: { provider: "custom", model: "flash" }, jev: { provider: "custom", model: "jev" }, maxContinuations: 6, timeoutMs: 300_000, enabled: false });
+    { flash: { provider: "custom", model: "flash" }, jev: { provider: "custom", model: "jev" }, maxContinuations: 6, timeoutMs: 300_000, flashThinking: "high", enabled: false });
   assert.equal(configFromSettings({ "auto-agent-loop": { "flash-model": "c/f", "jev-model": "c/j", "timeout-ms": 600_000 } }).timeoutMs, 600_000);
+  // Flash thinking is configurable because it shares the 20k output cap with the summary
+  // itself; the default is the level the summary was expected to run at all along.
+  assert.equal(DEFAULT_CONFIG.flashThinking, "high");
+  assert.equal(configFromSettings({ "auto-agent-loop": { "flash-model": "c/f", "jev-model": "c/j" } }).flashThinking, "high");
+  assert.equal(configFromSettings({ "auto-agent-loop": { "flash-model": "c/f", "jev-model": "c/j", "flash-thinking": "medium" } }).flashThinking, "medium");
+  for (const bad of ["high1", "HIGH", "", null, 1, true]) {
+    assert.throws(() => configFromSettings({ "auto-agent-loop": { "flash-model": "c/f", "jev-model": "c/j", "flash-thinking": bad } }));
+  }
   for (const bad of [0, -1, 1.5, "300000", null]) {
     assert.throws(() => configFromSettings({ "auto-agent-loop": { "flash-model": "c/f", "jev-model": "c/j", "timeout-ms": bad } }));
   }
@@ -370,7 +378,7 @@ test("configuration lives in settings.json under auto-agent-loop and rejects bad
 test("Flash uses exact configured model and rejects overflow, truncated output, and output of 20k tokens", async () => {
   const calls = [];
   const model = { provider: "custom", id: "flash", contextWindow: 100000, maxTokens: 24000 };
-  const ctx = { modelRegistry: { find: () => model, complete: async (...args) => { calls.push(args); return { stopReason: "stop", content: [{ type: "text", text: COMPLETE_SUMMARY }], usage: { output: 12 } }; } } };
+  const ctx = { modelRegistry: { find: () => model, streamSimple: (...args) => ({ result: async () => { calls.push(args); return { stopReason: "stop", content: [{ type: "text", text: COMPLETE_SUMMARY }], usage: { output: 12 } }; } }) } };
   const config = { ...DEFAULT_CONFIG, flash: { provider: "custom", model: "flash" } };
   assert.equal(await defaultSummarize("Transcript", ctx, undefined, config), COMPLETE_SUMMARY);
   assert.equal(calls[0][0], model); assert.equal(calls[0][2].maxTokens, 20000);
@@ -380,7 +388,14 @@ test("Flash uses exact configured model and rejects overflow, truncated output, 
   // The Flash path has no stream fixture here, so pin the option that sends it to the same
   // pi-ai retry policy the Jev call is proven to use below.
   assert.equal(calls[0][2].maxRetries, 2);
-  assert.equal((await defaultSummarize("T", ctx, undefined, { ...config, timeoutMs: 600_000 })) && calls[1][2].timeoutMs, 615_000);
+  // `complete()` forwards options to the provider's raw stream, which only understands
+  // provider-native knobs; `streamSimple` is the provider-neutral path that turns `reasoning`
+  // into what the provider needs. Without it a deepseek-style gateway is sent
+  // `thinking: {type:"disabled"}` on every round even when the user's thinking level is high.
+  assert.equal(calls[0][2].reasoning, "high");
+  assert.equal((await defaultSummarize("T", ctx, undefined, { ...config, flashThinking: "medium" })) && calls[1][2].reasoning, "medium");
+  assert.equal((await defaultSummarize("T", ctx, undefined, { ...config, flashThinking: "off" })) && calls[2][2].reasoning, undefined);
+  assert.equal((await defaultSummarize("T", ctx, undefined, { ...config, timeoutMs: 600_000 })) && calls[3][2].timeoutMs, 615_000);
   // Admission compares pi's reported context count against the Flash window.
   ctx.getContextUsage = () => ({ tokens: 90_000, contextWindow: 100_000, percent: 90 });
   await assert.rejects(defaultSummarize("x", ctx, undefined, config), /Flash context capacity.*80000.*90000/u);
@@ -393,7 +408,7 @@ test("Flash uses exact configured model and rejects overflow, truncated output, 
   await assert.rejects(defaultSummarize("x".repeat(100), ctx, undefined, config), /limit|capacity|budget/i);
   ctx.modelRegistry.find = () => model;
   for (const response of [{ stopReason: "length" }, { stopReason: "stop", content: [{ type: "text", text: "x" }], usage: { output: 20001 } }]) {
-    ctx.modelRegistry.complete = async () => response;
+    ctx.modelRegistry.streamSimple = () => ({ result: async () => response });
     await assert.rejects(defaultSummarize("x", ctx, undefined, config));
   }
 });
@@ -408,7 +423,7 @@ test("a summary that stops mid-output or omits sections 3-5 pauses instead of re
   // Section numbers are accepted as the prompt asks for them, with or without heading marks.
   assert.equal(assertCompleteSummary("1. a\n2. b\n3. c\n4. d\n5. e\n" + SUMMARY_END_MARKER), "1. a\n2. b\n3. c\n4. d\n5. e\n" + SUMMARY_END_MARKER);
   const model = { provider: "custom", id: "flash", contextWindow: 100000, maxTokens: 24000 };
-  const flash = { modelRegistry: { find: () => model, complete: async () => ({ stopReason: "stop", content: [{ type: "text", text: truncated }], usage: { output: 90 } }) } };
+  const flash = { modelRegistry: { find: () => model, streamSimple: () => ({ result: async () => ({ stopReason: "stop", content: [{ type: "text", text: truncated }], usage: { output: 90 } }) }) } };
   await assert.rejects(defaultSummarize("Transcript", flash, undefined, { ...DEFAULT_CONFIG, flash: { provider: "custom", model: "flash" } }), IncompleteSummaryError);
 
   let judged = 0;

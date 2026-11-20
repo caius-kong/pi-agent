@@ -127,7 +127,7 @@ const CJK = (repeats) => serializeForSummary([{ role: "toolResult", toolName: "r
 function flashCtx({ tokens } = {}) {
   return {
     getContextUsage: () => ({ tokens, contextWindow: FLASH.contextWindow, percent: tokens == null ? null : (tokens / FLASH.contextWindow) * 100 }),
-    modelRegistry: { find: () => FLASH, complete: async () => ({ stopReason: "stop", content: [{ type: "text", text: COMPLETE_SUMMARY }], usage: { output: 100 } }) },
+    modelRegistry: { find: () => FLASH, streamSimple: () => ({ result: async () => ({ stopReason: "stop", content: [{ type: "text", text: COMPLETE_SUMMARY }], usage: { output: 100 } }) }) },
   };
 }
 

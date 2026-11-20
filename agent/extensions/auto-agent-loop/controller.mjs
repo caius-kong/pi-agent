@@ -17,8 +17,11 @@ export const DEFAULT_CONFIG = Object.freeze({
   jev: Object.freeze({ provider: "trendmicro", model: "jev-1.13" }),
   maxContinuations: 3,
   timeoutMs: TIMEOUT_MS,
+  flashThinking: "high",
   enabled: false,
 });
+// The levels pi names for a model's thinking; `off` sends no reasoning at all.
+const FLASH_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const SUMMARY_MAX_TOKENS = 20_000;
 // Framing the summary request adds on top of the context pi counted: the system prompt,
 // the "Current Pi context:" line and the per-message prefixes.
@@ -49,8 +52,9 @@ export function validateConfig(value) {
   }
   if (!Number.isSafeInteger(value.maxContinuations) || value.maxContinuations < 0) throw new Error("auto-agent-loop maxContinuations must be a non-negative integer");
   if (!Number.isSafeInteger(value.timeoutMs) || value.timeoutMs <= 0) throw new Error("auto-agent-loop timeoutMs must be a positive integer");
+  if (!FLASH_THINKING_LEVELS.has(value.flashThinking)) throw new Error(`auto-agent-loop flashThinking must be one of ${[...FLASH_THINKING_LEVELS].join(", ")}`);
   if (typeof value.enabled !== "boolean") throw new Error("auto-agent-loop enabled must be a boolean");
-  return { flash: { ...value.flash }, jev: { ...value.jev }, maxContinuations: value.maxContinuations, timeoutMs: value.timeoutMs, enabled: value.enabled };
+  return { flash: { ...value.flash }, jev: { ...value.jev }, maxContinuations: value.maxContinuations, timeoutMs: value.timeoutMs, flashThinking: value.flashThinking, enabled: value.enabled };
 }
 
 export function configFromSettings(settings) {
@@ -70,6 +74,7 @@ export function configFromSettings(settings) {
     jev: model("jev-model"),
     maxContinuations: entry["max-loop"] === undefined ? DEFAULT_CONFIG.maxContinuations : entry["max-loop"],
     timeoutMs: entry["timeout-ms"] === undefined ? DEFAULT_CONFIG.timeoutMs : entry["timeout-ms"],
+    flashThinking: entry["flash-thinking"] === undefined ? DEFAULT_CONFIG.flashThinking : entry["flash-thinking"],
     enabled: entry.enable === undefined ? DEFAULT_CONFIG.enabled : entry.enable,
   });
 }
@@ -477,9 +482,17 @@ export async function defaultSummarize(transcript, ctx, signal, config = DEFAULT
   if (reported !== undefined && reported + FRAMING_RESERVE_TOKENS > limit) {
     throw new Error(`Flash context capacity exceeds input token budget (${limit}; pi reports ${reported} tokens); nothing was truncated`);
   }
-  const response = await ctx.modelRegistry.complete(model, context, {
+  // `complete()` hands options straight to the provider's raw stream, which only understands
+  // provider-native knobs (`reasoningEffort` for OpenAI-compatible APIs, `thinkingEnabled` for
+  // Anthropic); `streamSimple` is the provider-neutral entry point that turns `reasoning` into
+  // whatever the provider needs. Without it a deepseek-style gateway is sent
+  // `thinking: {type:"disabled"}` on every round, because `thinkingLevelMap.off` is a string
+  // and so the "off" branch always fires.
+  const flashThinking = config.flashThinking ?? DEFAULT_CONFIG.flashThinking;
+  const response = await ctx.modelRegistry.streamSimple(model, context, {
     signal, maxTokens, maxRetries: PROVIDER_RETRIES, timeoutMs: (config.timeoutMs ?? TIMEOUT_MS) + REQUEST_TIMEOUT_MARGIN_MS,
-  });
+    reasoning: flashThinking === "off" ? undefined : flashThinking,
+  }).result();
   if (response.stopReason !== "stop") throw new Error(response.errorMessage ?? `Flash output incomplete: ${response.stopReason}`);
   const summary = (response.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n");
   if (!summary.trim()) throw new Error("Flash returned an empty summary");

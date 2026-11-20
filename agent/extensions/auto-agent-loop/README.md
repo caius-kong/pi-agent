@@ -145,7 +145,7 @@ auto-agent-loop: ended · Probability(continue)=0.11 ≤ 0.20 · loop 0/3
 ## 成本
 
 - 每个结束轮次：1 次 Flash 总结 + 1 次 Jev 判定。没有轮次结束就不调用。
-- Flash 输入是**当前上下文**（不做增量），长会话里这部分是主要开销；输出上限 20k tokens。
+- Flash 输入是**当前上下文**（不做增量），长会话里这部分是主要开销；输出上限 20k tokens（含 thinking）。
 - Jev 输入是该摘要加上判定 instructions 和 criteria，上限 32k tokens。
 - 安全条件不满足、判定完成、`uncertain` 或达到熔断时都不额外调用。
 
@@ -160,7 +160,8 @@ auto-agent-loop: ended · Probability(continue)=0.11 ≤ 0.20 · loop 0/3
     "flash-model": "trendmicro/deepseek-v4-flash-0731-gmi-ray",
     "jev-model": "trendmicro/jev-1.13",
     "max-loop": 3,
-    "timeout-ms": 300000
+    "timeout-ms": 300000,
+    "flash-thinking": "high"
   }
 }
 ```
@@ -174,6 +175,9 @@ auto-agent-loop: ended · Probability(continue)=0.11 ≤ 0.20 · loop 0/3
 | `jev-model` | 同上；已注册的 classifier 优先，否则走 provider 的 `/systemone` 路由 |
 | `max-loop` | 非负整数，本请求最多自动续跑次数；`0` 仍判定但禁止续跑 |
 | `timeout-ms` | 正整数，默认 `300000`（5 分钟）；Flash + Jev 共用的总 deadline |
+| `flash-thinking` | Flash 总结的 thinking 档位，默认 `high`；取值为 Pi 的档位名（`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`），`off` 不发送 reasoning。该档位由 provider 映射成实际 effort，例如 deepseek 风格的网关会收到 `thinking: {type:"enabled"}` + `reasoning_effort` |
+
+Flash 的 thinking 与摘要正文共用 20k 输出上限（`max_completion_tokens`），所以档位越高，留给正文的预算越少；thinking token 同时计入输出计费。长会话里把档位调低是唯一不需要改代码的省成本方式。Jev 是 TypeSafe classifier（`/systemone` 的 state），没有 thinking 概念，不受该键影响。
 
 `controller.mjs` 中的 `DEFAULT_CONFIG` 是缺少 `auto-agent-loop` 键时的默认值。格式错误或显式模型不可用会直接报错（启动时写进 `status` 并告警一次），不静默 fallback、不自行换模型。续跑计数的重置规则见[熔断与重置（max-loop）](#熔断与重置max-loop)。
 
@@ -186,4 +190,4 @@ auto-agent-loop: ended · Probability(continue)=0.11 ≤ 0.20 · loop 0/3
 | `../../../tests/auto-agent-loop.test.mjs` | 单测：判定、配置、预算与展示 |
 | `../../../tests/auto-agent-loop-guard.test.mjs` | 单测：子会话守卫、pending request、重启语义 |
 
-使用 Pi 原语：`pi.on("agent_before_settle" | "input" | "session_start" | "session_tree")`、`pi.registerCommand()`、`ctx.modelRegistry.complete()` / `.classify()`、boundary continuation 与 `custom_message`。无 Herdr 依赖；`pi-subagents` 为可选集成（见[依赖](#依赖)）。
+使用 Pi 原语：`pi.on("agent_before_settle" | "input" | "session_start" | "session_tree")`、`pi.registerCommand()`、`ctx.modelRegistry.streamSimple()` / `.classify()`、boundary continuation 与 `custom_message`。无 Herdr 依赖；`pi-subagents` 为可选集成（见[依赖](#依赖)）。
