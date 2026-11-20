@@ -364,7 +364,8 @@
             "supportsStore": false,
             "supportsReasoningEffort": true,
             "thinkingFormat": "zai",
-            "supportsDeveloperRole": false
+            "supportsDeveloperRole": false,
+            "requiresThinkingAsText": true
           }
         },
         {
