@@ -96,6 +96,8 @@ agent/profiles/pi-subagents/notes/
 # research, not repo functionality. The profile JSONs still ship.
 agent/profiles/pi-subagents/README.md
 agent/model-vendor-specs.md
+# Internal gateway defect notes: provider-side behavior and routing details.
+docs/databricks-models-loss-reasoning_content.md
 AGENTS-optimization-report.md
 agent/pi-cc-extensions.json
 agent/worktrees/
