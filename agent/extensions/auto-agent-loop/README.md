@@ -166,7 +166,7 @@ auto-agent-loop: ended · Probability(continue)=0.11 ≤ 0.20 · loop 0/3
 }
 ```
 
-上例即 `DEFAULT_CONFIG`（缺少 `auto-agent-loop` 键时的默认值）。本机 `settings.json` 另将 `flash-model` 设为 `trendmicro/deepseek-v4.1-flash`、`timeout-ms` 设为 `600000`。
+上例即 `DEFAULT_CONFIG`（缺少 `auto-agent-loop` 键时的默认值）。本机 `settings.json` 另将 `flash-model` 设为 `trendmicro/deepseek-v4.1-flash`、`timeout-ms` 设为 `600000`，并**显式写出** `flash-thinking: "high"`：取值不靠缺省，避免“没写就是默认”与“没生效”分不清。
 
 | 键 | 说明 |
 |---|---|

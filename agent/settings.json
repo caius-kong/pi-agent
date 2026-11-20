@@ -66,6 +66,7 @@
   "auto-agent-loop": {
     "enable": true,
     "flash-model": "trendmicro/deepseek-v4.1-flash",
+    "flash-thinking": "high",
     "jev-model": "trendmicro/jev-1.13",
     "max-loop": 3,
     "timeout-ms": 600000
