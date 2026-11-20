@@ -14,13 +14,25 @@ const COMPACTION_CALLBACK_TIMEOUT_MS = 120_000;
 const SUBAGENT_STATUS_TIMEOUT_MS = 10_000;
 let subagentStatusRequestId = 0;
 
+// Every model-facing wording lives here: the mid-turn hint, the pre-turn judgment and the
+// tool's own description/guidelines must agree, so they are edited in one place.
+const MODEL_TEXT = {
+  midTurnCheck: (percent) => `[Pi auto-compact check] Context usage is ${percent.toFixed(1)}% of the model window. Compact only at a natural checkpoint: a coherent unit of work is done, nothing is pending (no running tool, delegated work, queued message, or decision awaiting the user), the goal, key decisions, constraints, and next action would survive summarization, and the overall task still has remaining work. If all of that holds, call request_compaction once before you stop; compaction runs when this run settles and the task then continues automatically. Otherwise keep working, or stop normally if the task is finished.`,
+  preTurnCheck: (percent, input) => `[Pi pre-turn compact check] Context usage (${percent.toFixed(1)}% of the model window) is above the active auto-compact threshold. A user request is held and is delivered after this decision — do not perform it here. It is:\n\n${input}\n\nContinuity comes first: only call request_compaction exactly once as your sole output if you are confident the held request is independent or can proceed from a summary without losing needed context or repeating work. Reply only SKIP-COMPACTION if a tool, delegation or queued message is pending, the request answers an ongoing interview question, a relevant choice is unresolved, or you are unsure it will resume correctly.`,
+  toolDescription: `Queue context compaction for Pi's final pre-settlement boundary. Call once as the only tool in the batch when context usage is strictly above the active auto-compact threshold, the active check identifies a safe boundary and nothing is pending. Pi commits the compaction and continuation drafts before continuing. Do not call it to wrap up a finished task, at the threshold or below, when auto-compact is off, or with unknown usage.`,
+  toolGuidelines: [
+    "Call request_compaction at most once per run, as the only tool in its batch, and only when the injected Pi runtime check reports context usage strictly above the active auto-compact threshold and the active check identifies a safe checkpoint. In mid-turn checks a coherent unit must be complete and substantial work must remain; in pre-turn checks the held request is the next work. The tool ends the current run so the extension can prepare a compaction draft at Pi's final pre-settlement boundary; Pi commits it before continuing.",
+    "Do not call it to wrap up a finished task: compaction is followed by an automatic continue, which is only useful when more work remains. A held pre-turn request is work that remains.",
+    "Call it alone, not alongside other tools; Pi only ends the run when every tool in the batch opts into termination.",
+    "Before calling, confirm no tool is running, no delegated work or supervisor decision is pending, and no queued message exists. Ensure the goal, key decisions, constraints, and next action can survive summarization.",
+    "At or below the active threshold, when auto-compact is off, with unknown usage, or if the tool declines, keep working.",
+  ],
+};
+
 function askMessage(percent) {
   return {
     role: "user",
-    content: [{
-      type: "text",
-      text: `[Pi auto-compact check] Context usage is ${percent.toFixed(1)}% of the model window. Compact only at a natural checkpoint: a coherent unit of work is done, nothing is pending (no running tool, delegated work, queued message, or decision awaiting the user), the goal, key decisions, constraints, and next action would survive summarization, and the overall task still has remaining work. If all of that holds, call request_compaction once before you stop; compaction runs when this run settles and the task then continues automatically. Otherwise keep working, or stop normally if the task is finished.`,
-    }],
+    content: [{ type: "text", text: MODEL_TEXT.midTurnCheck(percent) }],
     timestamp: Date.now(),
   };
 }
@@ -28,7 +40,7 @@ function askMessage(percent) {
 // The held user request starts its own run, so nothing competes with this decision:
 // the request is data here, not a pending commitment to serve.
 export function judgmentMessage(percent, input) {
-  return `[Pi pre-turn compact check] Context usage (${percent.toFixed(1)}% of the model window) is above the active auto-compact threshold. A user request is held and is delivered after this decision — do not perform it here. It is:\n\n${input}\n\nContinuity comes first: only call request_compaction exactly once as your sole output if you are confident the held request is independent or can proceed from a summary without losing needed context or repeating work. Reply only SKIP-COMPACTION if a tool, delegation or queued message is pending, the request answers an ongoing interview question, a relevant choice is unresolved, or you are unsure it will resume correctly.`;
+  return MODEL_TEXT.preTurnCheck(percent, input);
 }
 
 // Percent of the window at which a model's cheapest pricing tier stops applying.
@@ -366,16 +378,9 @@ export function registerAutoCompact(pi, {
   pi.registerTool({
     name: "request_compaction",
     label: "Request context compaction",
-    description:
-      `Queue context compaction for Pi's final pre-settlement boundary. Call once as the only tool in the batch when context usage is strictly above the active auto-compact threshold, the active check identifies a safe boundary and nothing is pending. Pi commits the compaction and continuation drafts before continuing. Do not call it to wrap up a finished task, at the threshold or below, when auto-compact is off, or with unknown usage.`,
+    description: MODEL_TEXT.toolDescription,
     promptSnippet: "Queue safe context compaction after this agent run settles",
-    promptGuidelines: [
-      "Call request_compaction at most once per run, as the only tool in its batch, and only when the injected Pi runtime check reports context usage strictly above the active auto-compact threshold and the active check identifies a safe checkpoint. In mid-turn checks a coherent unit must be complete and substantial work must remain; in pre-turn checks the held request is the next work. The tool ends the current run so the extension can prepare a compaction draft at Pi's final pre-settlement boundary; Pi commits it before continuing.",
-      "Do not call it to wrap up a finished task: compaction is followed by an automatic continue, which is only useful when more work remains. A held pre-turn request is work that remains.",
-      "Call it alone, not alongside other tools; Pi only ends the run when every tool in the batch opts into termination.",
-      "Before calling, confirm no tool is running, no delegated work or supervisor decision is pending, and no queued message exists. Ensure the goal, key decisions, constraints, and next action can survive summarization.",
-      "At or below the active threshold, when auto-compact is off, with unknown usage, or if the tool declines, keep working.",
-    ],
+    promptGuidelines: MODEL_TEXT.toolGuidelines,
     parameters: { type: "object", properties: {}, additionalProperties: false },
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       const result = controller.request(ctx);
