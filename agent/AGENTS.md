@@ -8,7 +8,7 @@
 - You may commit task-related changes without asking for confirmation.
 - If modifying a file that was not created in this session and is not under git, back it up first and report it at task end.
 - Never auto-run `git push origin`; require explicit user confirmation first.
-- Never clean up another task's resources, even merged/clean branches or worktrees, without explicit user handoff and approval for that task.
+- Require explicit user approval to discard or overwrite others' or unattributed uncommitted changes, even in files you are editing, and explicit user handoff and approval for that task before cleaning up another task's resources, even merged branches or clean worktrees.
 
 # Cost Safety
 - Never change or add a paid model, and never run batch paid calls, without explicit approval naming the model and the call budget. Exception: reasonable task-related orchestration with an estimated total cost of $5 or less does not require approval.
