@@ -1,5 +1,6 @@
 # Defaults
 - Respond in **Chinese** by default; keep technical terms in English.
+- By default, speak to me in an **ELI5** style; if I ask, explain in depth.
 
 # Environment
 - Use `uv` for all Python environment and package operations.
