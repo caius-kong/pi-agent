@@ -12,7 +12,8 @@
 - Require explicit user approval to discard or overwrite others' or unattributed uncommitted changes, even in files you are editing, and explicit user handoff and approval for that task before cleaning up another task's resources, even merged branches or clean worktrees.
 
 # Cost Safety
-- Obtain explicit approval naming the model and call budget before using paid models, except for reasonable task-related use of DeepSeek Flash, GLM Flash, or GPT Luna models. Never unilaterally modify a subagent's predefined model or thinking level.
+- Run authorized delegation with its configured model and thinking level without reconfirmation. Any override requires explicit user approval.
+- Get explicit approval naming the model and call budget for extra paid delegation or unapproved paid batches, including through subagents. Other paid calls require the same approval, except reasonable task-related use of DeepSeek Flash, GLM Flash, or GPT Luna.
 
 # Worktree Development
 - Prefer working in the current checkout; use a worktree only when its isolation benefits outweigh the extra overhead.
