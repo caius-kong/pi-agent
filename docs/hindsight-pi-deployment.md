@@ -155,6 +155,8 @@ HINDSIGHT_API_TOKEN=<tenant key> ./bootstrap.sh \
 
 默认一 repo 一 bank，而 **bank 是 recall 硬边界**（`recall` / `retain` / `reflect` 都在单个 bank 内，没有跨 bank 查询），所以跨 repo 的 agent 看不到别的 repo 的记忆。仅当这些 repo **本来就属于同一领域**（一个平台拆成多个服务、库 + 消费方）时才合并，且**要在积累历史之前做**：事后再合是搬记忆，不是改开关。
 
+**合并只对 cwd 落在收敛 repo 内的会话生效。** bank 由会话的 cwd 解析（`deriveBankId`：`mapPathToBank` → `bankIdTemplate`，`{gitProject}` 取该目录主 worktree 的 basename），且没有任何 `hindsight_*` 工具接受 `bank` 或 `tags`。所以一个从任意目录启动、用绝对路径跨 repo 干活的 agent（本机 `l10n-code-explore` 即此类：定义里无 `cwd` 字段）拿到的是**启动目录**的 bank——合并对它无效，它的读写照旧落在那个 bank。`hindsight_diagnose` 可复现：`~/.pi` → `coding-agent::.pi`，`~/dev/caius-kong/skills` → `coding-agent::skills`，只有落在 7 个 repo 目录内才返回共享 bank。要让这类 agent 也进共享 bank，只能给它一个落在收敛 repo 内的 cwd；配置侧没有替代方案。
+
 这**不是** §2.1 说的那种用法。§2.1 禁止的是把第三方 clone 用 `mapPathToBank` 并进自己的项目 bank（一次问答就污染项目记忆）；这里是把自己拥有的、同一领域的 repo 显式收敛，并且每个 repo 仍保留独立的观测作用域。
 
 **机制二选一**
@@ -183,9 +185,10 @@ HINDSIGHT_API_TOKEN=<tenant key> ./bootstrap.sh \
 }
 ```
 
-- **空 scope 不能省。** `[[], ["project:<repo>"]]` 既给每个 repo 独立信念集，又保留页面读取的无 tag 全域层。写成只有非空项（如 `[["project:*"]]`）隔离效果一样，但页面会退化成只读原始事实——这层是页面 `tags_match: "all"` 的唯一入口。`per_source` 用的也是同一个 `[[], …]` 形状。
-- **优先字面值而非 glob**：每个 section 只覆盖一个 repo，字面值不依赖服务端 tag 匹配，也不依赖 1.1+ 的 glob 语义。
+- **空 scope 不能省。** `[[], ["project:<repo>"]]` 既给每个 repo 独立信念集，又保留页面读取的无 tag 全域层。写成只有非空项（如 `[["project:*"]]`）在写入都带 `project:` tag 时隔离效果一样，但页面会退化成只读原始事实——这层是页面拿到 consolidated 观测的唯一入口（`tags_match: "all"` 会带过 untagged，带 `project:` 的观测对页面不可见）。去掉它，页面只剩显式带 `knowledge:*` tag 的原始事实——实测：`[["project:*"]]` 的 bank 里同一份内容，普通 recall 能取到该观测，页面的过滤器返回 0。`per_source` 用的也是同一个 `[[], …]` 形状。代价是每份文档多跑一遍 consolidation（两个 scope 各一次）；`project:<repo>` 这层目前的读取方是用 `customPages` + `tags` 做的 per-repo 页面，普通 recall 不按 scope 过滤。
+- **优先字面值而非 glob**：每个 section 只覆盖一个 repo，字面值不依赖服务端 tag 匹配，也不依赖 1.1+ 的 glob 语义。glob 另有一处回退：写入不带 `project:` tag 时 glob 匹配不到任何 tag，服务端回落到 `combined`（按 tag 集合分组），而 `(source:chat, harness:pi)` 这类集合跨 repo 完全相同——跨 repo 汇聚会从后门回来。实测：`[["project:*"]]` 且无 `retainTags` 的写入落到 scope `["harness:pi", "source:upload"]`。
 - `coding-agent.json` 是 `JSON.parse`：一个 `//` 注释会让**整份配置**被丢弃并回落到默认值（只在 stderr 留一行，症状是记忆突然变安静）。
+- **`project:<repo>` 必须等于 `{gitProject}` 的实际值**（目录或主 worktree 的 basename，大小写敏感）。字面 scope 不依赖 tag，两者不一致时观测照旧分区、不会报错；但记忆上的 `project:` tag 会与 scope 各说各话，将来按 tag 建的 per-repo 页面取不到东西。改目录名前先核对这一项。
 
 **顺序：先冻结、再改配置、再搬**
 
