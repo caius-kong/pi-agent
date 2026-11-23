@@ -12,7 +12,7 @@
 - Require explicit user approval to discard or overwrite others' or unattributed uncommitted changes, even in files you are editing, and explicit user handoff and approval for that task before cleaning up another task's resources, even merged branches or clean worktrees.
 
 # Cost Safety
-- Never change or add a paid model, and never run batch paid calls, without explicit approval naming the model and the call budget. Never unilaterally modify a subagent's predefined model/thinking. Exception: reasonable task-related orchestration with an estimated total cost of $5 or less does not require approval.
+- Obtain explicit approval naming the model and call budget before using paid models, except for reasonable task-related use of DeepSeek Flash, GLM Flash, or GPT Luna models. Never unilaterally modify a subagent's predefined model or thinking level.
 
 # Worktree Development
 - Prefer working in the current checkout; use a worktree only when its isolation benefits outweigh the extra overhead.
