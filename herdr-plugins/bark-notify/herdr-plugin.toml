@@ -1,0 +1,28 @@
+id = "caius.bark-notify"
+name = "Bark Notify"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Push agent status changes to Bark (iOS)."
+platforms = ["linux", "macos", "windows"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["python3", "notify.py"]
+
+[[events]]
+on = "pane.exited"
+command = ["python3", "notify.py"]
+
+[[events]]
+on = "pane.closed"
+command = ["python3", "notify.py"]
+
+[[actions]]
+id = "test"
+title = "Bark Notify: send test push"
+command = ["python3", "notify.py", "test"]
+
+[[actions]]
+id = "status"
+title = "Bark Notify: show config and tracked panes"
+command = ["python3", "notify.py", "status"]
