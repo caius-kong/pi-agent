@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.5.2",
+  "lastChangelogVersion": "1.6.0",
   "theme": "dark",
   "defaultProvider": "trendmicro",
   "defaultModel": "deepseek-v4.1-flash",
@@ -72,10 +72,11 @@
     "timeout-ms": 600000
   },
   "extensionChangelogVersions": {
-    "{\"source\":\"npm:pi-subagents\",\"scope\":\"user\"}": "0.88.0",
-    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.47.0",
-    "{\"source\":\"npm:@narumitw/pi-btw\",\"scope\":\"user\"}": "0.63.8",
-    "{\"source\":\"npm:pi-atelier\",\"scope\":\"user\"}": "0.18.0"
+    "{\"source\":\"npm:pi-subagents\",\"scope\":\"user\"}": "0.90.0",
+    "{\"source\":\"npm:pi-web-access\",\"scope\":\"user\"}": "0.48.0",
+    "{\"source\":\"npm:@narumitw/pi-btw\",\"scope\":\"user\"}": "0.63.9",
+    "{\"source\":\"npm:pi-atelier\",\"scope\":\"user\"}": "0.18.0",
+    "{\"source\":\"npm:pi-cc-extensions\",\"scope\":\"user\"}": "1.0.21"
   },
   "fullscreenExitOutput": "transcript",
   "fullscreenScrollbar": "auto"
