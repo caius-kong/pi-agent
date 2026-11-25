@@ -2,7 +2,7 @@
 
 | 任务 | 调度 | 入口 | 产出 |
 |---|---|---|---|
-| 每日晨报（凭据到期 · Gmail · 科技热点） | `0 9 * * 1-5` | `agent/jobs/morning-brief.sh` | `jobs/YYYY-MM-DD.html`（自动用 Chrome 打开） |
+| 每日晨报（凭据到期 · 需回复/重要通知 · 科技热点） | `0 9 * * 1-5` | `agent/jobs/morning-brief.sh` | `jobs/YYYY-MM-DD.html`（自动用 Chrome 打开） |
 
 ## Usage
 
@@ -10,7 +10,8 @@
 
 ```bash
 brew install coreutils steipete/tap/gogcli && gog auth login   # timeout / gog
-pi install npm:pi-web-access                                    # web_search、fetch_content
+pi install npm:pi-subagents                                     # subagent（scout 查邮件 / researcher 查热点）
+pi install npm:pi-web-access                                    # web_search、fetch_content（子代理要用）
 ```
 
 另需 `pi`、`python3`、Google Chrome。

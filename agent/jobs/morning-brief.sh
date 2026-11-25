@@ -1,5 +1,6 @@
 #!/bin/bash
-# 每日晨报：用 pi agent 生成「Gmail」+「科技热点」两个板块，合成一个 HTML，并用本机 Chrome 打开。
+# 每日晨报：一个 pi 父代理派两个子代理（scout 查邮件 / researcher 查热点）取数，
+# 父代理只负责排版；脚本再拼上凭据板块，输出单个 HTML 并用本机 Chrome 打开。
 # 由 crontab 在工作日 9:00 调用；手动验证：NO_OPEN=1 ~/.pi/agent/jobs/morning-brief.sh
 set -uo pipefail
 
@@ -15,6 +16,9 @@ JOBS_DIR="$AGENT_DIR/jobs"
 [ -r "$JOBS_DIR/gog.env" ] && . "$JOBS_DIR/gog.env"
 
 PROMPT_DIR="$JOBS_DIR/prompts"
+# 父代理只用 subagent 工具派活；两个子代理的工具来自各自的 agent 定义，
+# 但它们要用的 web_search / fetch_content 由 pi-web-access 提供，必须在父进程加载。
+SUBAGENTS_EXT="$AGENT_DIR/npm/node_modules/pi-subagents"
 WEB_EXT="$AGENT_DIR/npm/node_modules/pi-web-access"
 OUT_DIR="$JOBS_DIR"
 LOG_DIR="$OUT_DIR/logs"
@@ -23,26 +27,29 @@ MODEL="${MORNING_MODEL:-<pi default>}"
 TODAY=$(date +%F)
 NOW=$(date '+%F %H:%M')
 HTML="$OUT_DIR/$TODAY.html"
-JOB_TIMEOUT=420
+JOB_TIMEOUT=540
 
 mkdir -p "$OUT_DIR" "$LOG_DIR"
 
 # 去掉模板的 YAML frontmatter，只取正文
 prompt_body() { awk 'BEGIN{n=0} /^---$/{n++; next} n>=2' "$1"; }
 
-run_job() {
-  local key=$1 label=$2 prompt=$3 tools=$4 ext=${5:-}
-  local log="$LOG_DIR/$TODAY-$key.log"
+run_brief() {
+  local log="$LOG_DIR/$TODAY-brief.log"
   local out rc
-  echo "=== $(date '+%F %T') start $key model=$MODEL tools=$tools" >>"$log"
-  out=$(cd "$HOME" && timeout "$JOB_TIMEOUT" pi --print --no-session -ne ${ext:+-e "$ext"} \
-        ${MORNING_MODEL:+--model "$MORNING_MODEL"} --thinking low --tools "$tools" \
-        -- "$(prompt_body "$PROMPT_DIR/$prompt")" 2>>"$log")
+  echo "=== $(date '+%F %T') start brief model=$MODEL tools=subagent" >>"$log"
+  out=$(cd "$HOME" && timeout "$JOB_TIMEOUT" pi --print --no-session -ne \
+        -e "$SUBAGENTS_EXT" -e "$WEB_EXT" \
+        ${MORNING_MODEL:+--model "$MORNING_MODEL"} --thinking low --tools "subagent" \
+        -- "$(prompt_body "$PROMPT_DIR/morning-brief.md")" 2>>"$log")
   rc=$?
   echo "=== $(date '+%F %T') exit=$rc bytes=${#out}" >>"$log"
   if [ "$rc" -ne 0 ] || [ -z "${out//[[:space:]]/}" ]; then
-    printf '<section><h2>%s</h2><p class="error">生成失败（exit=%s，耗时上限 %ss）。日志：%s</p></section>\n' \
-      "$label" "$rc" "$JOB_TIMEOUT" "${log/#$HOME/~}"
+    # 7 个板块全部占位，保证 HTML 里 <h2> 数量不变、失败靠 class="error" 暴露
+    for label in "📮 需要回复" "🔔 重要通知" "📬 其余未读" "🤖 AI 热点" "💻 Hacker News" "🔥 GitHub Trending" "📝 Simon Willison"; do
+      printf '<section><h2>%s</h2><p class="error">生成失败（exit=%s，耗时上限 %ss）。日志：%s</p></section>\n' \
+        "$label" "$rc" "$JOB_TIMEOUT" "${log/#$HOME/~}"
+    done
     return 1
   fi
   printf '%s\n' "$out"
@@ -50,8 +57,7 @@ run_job() {
 
 CRED_HTML=$(timeout 60 python3 "$AGENT_DIR/jobs/credential-inventory.py" 2>>"$LOG_DIR/$TODAY-cred.log")
 [ -n "${CRED_HTML//[[:space:]]/}" ] || CRED_HTML='<section><h2>🔑 凭据到期</h2><p class="error">检查脚本无输出，见 logs/</p></section>'
-GMAIL_HTML=$(run_job gmail "📧 Gmail" morning-gmail.md "bash" "")
-TECH_HTML=$(run_job tech "🤖 科技热点" morning-tech.md "web_search,fetch_content" "$WEB_EXT")
+BRIEF_HTML=$(run_brief)
 
 {
   cat <<EOF
@@ -116,8 +122,7 @@ TECH_HTML=$(run_job tech "🤖 科技热点" morning-tech.md "web_search,fetch_c
     <div class="stamp">$NOW · 由 pi agent 生成</div>
   </header>
 $CRED_HTML
-$GMAIL_HTML
-$TECH_HTML
+$BRIEF_HTML
   <footer>raw logs: ~/.pi/agent/jobs/logs/</footer>
 </main>
 </body>
