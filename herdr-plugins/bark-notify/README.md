@@ -145,6 +145,23 @@ python3 notify.py --dry-run
 
 `--dry-run` 打印将要请求的 URL（key 已脱敏）。`--force` 绕过免打扰，用于手动验证。
 
+## 测试
+
+49 个用例，纯标准库，不联网、不需要 herdr 在跑、不碰真实 state 目录：
+
+```bash
+cd ~/.pi/herdr-plugins/bark-notify
+python3 -m unittest discover -s tests -v
+```
+
+覆盖状态机的全部迁移（含 `done` 与 `idle` 两种完成）、blocked 延迟重查、免打扰的解析与时间边界、正文三级来源、配置解析、URL 构造与密钥打码、并发写 state，以及三个已修回归：
+
+- 读不到实时状态时**不得**取消 blocked 推送
+- 写错的免打扰配置**不得**静默掉全部通知
+- `pane.closed` 必须清理 state 条目（否则 pane id 复用时误判完成）
+
+测试跟着插件走，而不是放进仓库根目录的 `tests/`：它是用 `herdr plugin link` 按绝对路径挂进 Herdr 的独立 Python 程序，不是 pi 扩展，仓库那套 `node --test tests/*.test.mjs` 跑不了它。
+
 ## 安全边界
 
 - 只读 `HERDR_PLUGIN_EVENT_JSON` / `HERDR_PLUGIN_CONTEXT_JSON` / `herdr agent list` / `herdr workspace get` / agent 自己的 session 文件，写一个 `state.json`
