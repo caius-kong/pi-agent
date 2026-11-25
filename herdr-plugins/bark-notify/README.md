@@ -1,6 +1,6 @@
 # herdr-bark
 
-把 Herdr 的 agent 状态变化推到 Bark（iOS）。345 行，纯 Python 标准库，零第三方依赖。
+把 Herdr 的 agent 状态变化推到 Bark（iOS）。405 行，纯 Python 标准库，零第三方依赖。
 
 只用两个官方接口：Herdr 的 plugin event hook（`herdr-plugin.toml` 的 `[[events]]`）和 Bark 的 GET 推送接口。
 
@@ -16,13 +16,28 @@
 | `agent_status` → `unknown` | 「<agent> 状态丢失」 | 仅当上一状态是 working/blocked |
 | `pane.exited` / `pane.closed` | 「<agent> 已退出」 | |
 
-推送内容形如：
+推送内容形如（正文三行：位置 · 目标 · 最后回复）：
 
 ```
 标题：pi 已完成
 正文：π - xbox - .pi · pi-config · main (2m05s)
-       终端标题         仓库        分支   本轮耗时
+      目标：把 herdr-bark 的免打扰改成工作日 9-12、14-18
+      已完成，提交在 cf952d25，README 也同步更新了。
 ```
+
+## 正文内容
+
+正文最多三行，每行独立可关：
+
+| 行 | 来源 | 关闭方式 |
+|---|---|---|
+| 位置 | 终端标题 · 仓库 · 分支（· 耗时） | — |
+| 目标 | session 里最后一条 `agent-goal-state` 的 `goal`，没设 goal 时退到 `lastPrompt` | `BARK_GOAL_CHARS=0` |
+| 最后回复 | session 里最后一条 assistant 消息的文本 | `BARK_REPLY_CHARS=0` |
+
+两个 `_CHARS` 同时是截断长度。文本里的 Markdown 链接只留标题、`**` 和反引号去掉，所以手机上不会看到一串 URL。
+
+能取到哪些取决于 agent 是否向 Herdr 上报 session 文件（`agent_session.value`）。pi 会上报，codex 不报——codex 的推送只剩位置行，但它的终端标题本身就是任务描述。
 
 ## 安装
 
@@ -71,6 +86,8 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 | `BARK_LEVEL` | 空 | `active` / `timeSensitive` / `passive`；`timeSensitive` 可穿透专注模式 |
 | `BARK_SOUND` | 空 | 如 `alarm` |
 | `BARK_BLOCKED_DELAY` | `3` | blocked 后重查延迟秒数，`0` 关闭 |
+| `BARK_REPLY_CHARS` | `200` | 最后回复的截断长度，`0` 不推这一行 |
+| `BARK_GOAL_CHARS` | `120` | 目标行的截断长度，`0` 不推这一行 |
 | `BARK_QUIET_ENABLE` | `true` | 免打扰总开关 |
 | `BARK_QUIET_TZ` | 系统时区 | 免打扰判断用的时区 |
 | `BARK_QUIET_DAYS` | 空（每天） | 免打扰生效的星期 |
@@ -86,6 +103,8 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 **`focused_pane_cwd` 不能直接用。** 它只在 `focused_pane_id` 等于事件 pane 时才可信；盯着 A pane 而 B pane 完成时，用它会报出 A 的目录。这里一律用 `herdr agent list` 回查事件 pane 自己的 `foreground_cwd`。
 
 **blocked 常是瞬态。** 自批准型 agent 会短暂经过这个状态，所以延迟后重读一次实时状态，已经继续执行就不推。
+
+**回复和目标是读 transcript，不是抓屏。** agent TUI 的最后几行永远是输入框和状态栏，抓屏拿不到回复。Herdr 在 `agent list` 里给出 `agent_session.value`（session 文件的绝对路径），所以直接读该 JSONL 末尾 256 KB，从后往前取最后一条 assistant 消息和最后一条 `agent-goal-state`。首行可能是截断的半行 JSON，解析失败就跳过。
 
 ## 尚未实现
 
@@ -107,6 +126,6 @@ python3 notify.py --dry-run
 
 ## 安全边界
 
-- 只读 `HERDR_PLUGIN_EVENT_JSON` / `HERDR_PLUGIN_CONTEXT_JSON` / `herdr agent list`，写一个 `state.json`
+- 只读 `HERDR_PLUGIN_EVENT_JSON` / `HERDR_PLUGIN_CONTEXT_JSON` / `herdr agent list` / agent 自己的 session 文件，写一个 `state.json`
 - 唯一外部调用是 Bark 服务器，超时 10 秒；失败只写 stderr
 - 密钥只从本目录 `.env` 读，不写进日志，也不进 git（`.gitignore` + mode 600）

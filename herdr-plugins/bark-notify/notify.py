@@ -24,12 +24,13 @@ Quiet hours silence pushes for the hours you are at the desk anyway:
     BARK_QUIET_EXEMPT=          # kinds that still fire, e.g. "blocked"
 
 Recognised keys: BARK_KEY, BARK_SERVER, BARK_GROUP, BARK_LEVEL, BARK_SOUND,
-BARK_BLOCKED_DELAY, BARK_QUIET_ENABLE, BARK_QUIET_TZ, BARK_QUIET_DAYS,
-BARK_QUIET_HOURS, BARK_QUIET_EXEMPT.
+BARK_BLOCKED_DELAY, BARK_REPLY_CHARS, BARK_GOAL_CHARS, BARK_QUIET_ENABLE,
+BARK_QUIET_TZ, BARK_QUIET_DAYS, BARK_QUIET_HOURS, BARK_QUIET_EXEMPT.
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -44,9 +45,12 @@ CONFIG_FILE = PLUGIN_ROOT / ".env"
 STATE_FILE = STATE_DIR / "state.json"
 
 CONFIG_KEYS = ("BARK_KEY", "BARK_SERVER", "BARK_GROUP", "BARK_LEVEL",
-               "BARK_SOUND", "BARK_BLOCKED_DELAY", "BARK_QUIET_ENABLE",
-               "BARK_QUIET_TZ", "BARK_QUIET_DAYS", "BARK_QUIET_HOURS",
-               "BARK_QUIET_EXEMPT")
+               "BARK_SOUND", "BARK_BLOCKED_DELAY", "BARK_REPLY_CHARS",
+               "BARK_GOAL_CHARS", "BARK_QUIET_ENABLE", "BARK_QUIET_TZ",
+               "BARK_QUIET_DAYS", "BARK_QUIET_HOURS", "BARK_QUIET_EXEMPT")
+
+SESSION_TAIL_BYTES = 256 * 1024
+LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
@@ -214,6 +218,85 @@ def git_branch(cwd):
         return ""
 
 
+def as_int(value, default):
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def clip(text, limit):
+    flat = LINK_RE.sub(r"\1", text or "")
+    flat = " ".join(flat.replace("**", "").replace("`", "").split())
+    if limit <= 0 or not flat:
+        return ""
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+def read_session_tail(path):
+    """Parse the last chunk of a JSONL session file, newest entries last."""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, 2)
+            size = handle.tell()
+            start = max(0, size - SESSION_TAIL_BYTES)
+            handle.seek(start)
+            data = handle.read()
+    except OSError:
+        return []
+    lines = data.decode("utf-8", "replace").splitlines()
+    if start > 0 and lines:
+        lines = lines[1:]  # the first line is probably cut mid-object
+    entries = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return entries
+
+
+def message_text(message):
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    parts = []
+    for block in content or []:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(block.get("text") or "")
+    return "\n".join(parts)
+
+
+def session_context(info, cfg):
+    """Last reply and goal, from the agent's own session transcript.
+
+    Herdr reports `agent_session.value` for agents that announce a session file
+    (pi does; codex does not). Screen scraping cannot recover these reliably:
+    the tail of an agent TUI is its input box and status bar.
+    """
+    path = (info.get("agent_session") or {}).get("value")
+    want_reply = as_int(cfg.get("BARK_REPLY_CHARS"), 200)
+    want_goal = as_int(cfg.get("BARK_GOAL_CHARS"), 120)
+    if not path or (want_reply <= 0 and want_goal <= 0):
+        return "", ""
+
+    reply = goal = ""
+    for entry in reversed(read_session_tail(path)):
+        if not goal and want_goal > 0 and entry.get("customType") == "agent-goal-state":
+            data = entry.get("data") or {}
+            goal = clip(data.get("goal") or data.get("lastPrompt") or "", want_goal)
+        if not reply and want_reply > 0 and entry.get("type") == "message":
+            message = entry.get("message") or {}
+            if message.get("role") == "assistant":
+                reply = clip(message_text(message), want_reply)
+        if (goal or want_goal <= 0) and (reply or want_reply <= 0):
+            break
+    return goal, reply
+
+
 def describe(data, context, info):
     agent = (info.get("agent") or data.get("display_agent")
              or data.get("agent") or "agent")
@@ -295,13 +378,18 @@ def handle_event(cfg, state, dry_run=False, force=False):
     if not info:
         info = pane_info(pane_id)
     agent, where = describe(data, context, info)
+    goal, reply = session_context(info, cfg)
     title = "{} {}".format(agent, LABELS[kind])
     if kind == "done":
         stamp = " ({})".format(duration or time.strftime("%H:%M"))
     else:
         stamp = ""
-    body = (where + stamp) if where else (LABELS[kind] + stamp)
-    push(cfg, title, body, dry_run=dry_run)
+    lines = [(where + stamp) if where else (LABELS[kind] + stamp)]
+    if goal:
+        lines.append("目标：" + goal)
+    if reply:
+        lines.append(reply)
+    push(cfg, title, "\n".join(lines), dry_run=dry_run)
     return 0
 
 
@@ -330,6 +418,8 @@ def main(argv):
             cfg.get("BARK_QUIET_HOURS", "-") or "-",
             cfg.get("BARK_QUIET_TZ", "-") or "-"))
         print("quiet exempt:  {}".format(cfg.get("BARK_QUIET_EXEMPT", "-") or "-"))
+        print("reply chars:   {}".format(cfg.get("BARK_REPLY_CHARS", "200")))
+        print("goal chars:    {}".format(cfg.get("BARK_GOAL_CHARS", "120")))
         now = local_now(cfg)
         print("now:           {} {}".format(
             now.strftime("%a %H:%M"),
