@@ -1,53 +1,28 @@
 # herdr-bark
 
-把 Herdr 的 agent 状态变化推到 Bark（iOS）。**345 行，纯 Python 标准库，零第三方依赖。**
+把 Herdr 的 agent 状态变化推到 Bark（iOS）。345 行，纯 Python 标准库，零第三方依赖。
 
-只用 Herdr 官方的 plugin event hook（`herdr-plugin.toml` 的 `[[events]]`）和 Bark 官方的 GET 推送接口。
-
-## 为什么不用现成插件
-
-`zgxme/herdr-webhook-notify` 质量不差（CI、70 个测试、SECURITY.md），但它是 11 个渠道的通用转发器：为了发一条 Bark 推送，要跑 13 个 provider 实现 + i18n + vendored tomli + 重试队列。Herdr 官方明确 plugin 以用户权限运行且 **Herdr 不审查代码**（[docs/plugins](https://herdr.dev/tui/docs/plugins/)）——stars 不是安全指标，行数是。
-
-| | zgxme 插件 | 本插件 |
-|---|---|---|
-| 行数 | ~2000（含 13 个 provider） | 352 |
-| 依赖 | Python 3.9+，vendored tomli | 标准库 |
-| 渠道 | 11 个，无 Bark | Bark |
-| 覆盖的两个坑 | ✅ | ✅ |
-| 免打扰时段 | ✅ | ✅ |
-
-## 覆盖了什么
-
-`zgxme` 的 README 点出「自己写 hook 会踩的两个坑」，本插件都覆盖：
-
-**坑 1：正盯着 pane 时完成会漏报。** Herdr 只在完成「未被查看」时报 `done`；你正看着那个 pane 时，同一个事件以 `idle` 到达。只匹配 `done` 的 hook 会静默丢弃。
-→ 本插件按 pane 记住上一个状态，把 `working|blocked -> idle` 也判定为完成。
-
-**坑 2：事件里没有任务信息。** payload 的 `title` 只在有东西调用 `herdr pane report-metadata` 时才出现，agent 默认不填。
-→ 本插件通过 `herdr agent list` 回查该 pane，补上 agent 类型、终端标题、cwd，再用 `git rev-parse` 补分支。
-
-实测推送内容：
-
-```
-标题：pi 已完成
-正文：π - xbox - .pi · pi-config · main (2m05s)
-```
-
-### 一个容易写错的地方
-
-`HERDR_PLUGIN_CONTEXT_JSON` 里的 `focused_pane_cwd` **只在 `focused_pane_id` 等于事件 pane 时才可信**。你盯着 A pane 而 B pane 完成时，直接用 `focused_pane_cwd` 会把 A 的目录报给 B 的通知。本插件不用它，改用 `herdr agent list` 回查事件 pane 自己的 `foreground_cwd`。
+只用两个官方接口：Herdr 的 plugin event hook（`herdr-plugin.toml` 的 `[[events]]`）和 Bark 的 GET 推送接口。
 
 ## 触发范围
 
 | 事件 | 推送 | 说明 |
 |---|---|---|
 | `agent_status` → `blocked` | 「<agent> 需要你」 | 延迟 `BARK_BLOCKED_DELAY` 秒后重读实时状态，agent 自己批准掉的不推 |
-| `agent_status` → `done` | 「<agent> 已完成」 | 你没在看的 pane 完成 |
-| `working`/`blocked` → `idle` | 「<agent> 已完成」 | 你在看的 pane 完成（坑 1） |
+| `agent_status` → `done` | 「<agent> 已完成」 | 未被查看的 pane 完成 |
+| `working`/`blocked` → `idle` | 「<agent> 已完成」 | 正在查看的 pane 完成 |
 | `done` → `idle` | 不推 | 同一次完成不重复 |
 | `working` | 不推 | 只记开始时间，用来算耗时 |
 | `agent_status` → `unknown` | 「<agent> 状态丢失」 | 仅当上一状态是 working/blocked |
 | `pane.exited` / `pane.closed` | 「<agent> 已退出」 | |
+
+推送内容形如：
+
+```
+标题：pi 已完成
+正文：π - xbox - .pi · pi-config · main (2m05s)
+       终端标题         仓库        分支   本轮耗时
+```
 
 ## 安装
 
@@ -62,15 +37,15 @@ herdr plugin log list --plugin caius.bark-notify
 
 ## 配置
 
-配置**只有一个位置**：`~/.pi/herdr-plugins/bark-notify/.env`（gitignore 掉，mode 600）。
+配置**只有一个位置**：`~/.pi/herdr-plugins/bark-notify/.env`（gitignore 掉，mode 600）。从 `.env.example` 复制起步。
 
-**没有回退链** —— 不读 `~/.env`，也不读 Herdr 的插件配置目录。这是故意的：`BARK_KEY` 只能存在一份，多位置自动优先级会让密钥在无意识的情况下被存两次。进程环境变量仍然覆盖（方便一次性测试），但那是运行时值，不是存储位置。
+没有回退链：不读 `~/.env`，也不读 Herdr 的插件配置目录。`BARK_KEY` 只存一份，避免密钥在多处各存一份而无人察觉。进程环境变量仍可覆盖（用于一次性测试），那是运行时值，不是存储位置。
 
-`herdr plugin action invoke caius.bark-notify.status` 会打印配置文件路径、key 是否存在、当前是否处于免打扰。
+`herdr plugin action invoke caius.bark-notify.status` 打印配置文件路径、key 是否存在、当前是否处于免打扰。
 
-### 免打扰时段（quiet hours）
+### 免打扰时段
 
-在电脑前的时段不必推手机——那时候你看屏幕就行。
+在电脑前的时段不必推手机——那时候看屏幕就行。
 
 ```bash
 BARK_QUIET_ENABLE=true                         # 总开关，false 时忽略下面所有设置
@@ -82,9 +57,9 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 
 区间左闭右开：`09:00` 开始静音，`12:00` 恢复。默认工作日 9-12、14-18 静音，其余时间照常推。
 
-`BARK_QUIET_ENABLE=false` 可以临时关掉整套免打扰而不用删时段（假期、出差、或者想让手机响一天）。
+`BARK_QUIET_ENABLE=false` 临时关掉整套免打扰而不删时段，适合假期或出差。
 
-**`BARK_QUIET_EXEMPT=blocked` 值得考虑**：免打扰的假设是「我在电脑前」，但你偶尔会临时离开。开了之后，审批请求仍会在工作日打扰你，其余类型静音。
+`BARK_QUIET_EXEMPT=blocked` 值得考虑：免打扰的假设是「我在电脑前」，但偶尔会临时离开。开了之后审批请求仍会在工作日打扰，其余类型静音。
 
 ### 全部配置项
 
@@ -102,19 +77,25 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 | `BARK_QUIET_HOURS` | 空（不静音） | 免打扰时段 |
 | `BARK_QUIET_EXEMPT` | 空 | 免打扰期间仍然推送的类型 |
 
-## 它不做什么
+## 实现要点
 
-以下 zgxme 插件有、本插件**没有**（需要时再加，各约 5-10 行）：
+**完成状态有两种。** Herdr 只在完成「未被查看」时报 `done`；正在看那个 pane 时，同一个事件以 `idle` 到达。只匹配 `done` 会静默丢弃这类完成，所以按 pane 记住上一状态，把 `working|blocked -> idle` 也判定为完成。
 
-- `cooldown_seconds` 同 pane 同类去重
+**事件里没有任务信息。** payload 的 `title` 只在有东西调用 `herdr pane report-metadata` 时才出现，agent 默认不填。所以通过 `herdr agent list` 回查该 pane，取 agent 类型、终端标题与 cwd，再用 `git rev-parse` 补分支。
+
+**`focused_pane_cwd` 不能直接用。** 它只在 `focused_pane_id` 等于事件 pane 时才可信；盯着 A pane 而 B pane 完成时，用它会报出 A 的目录。这里一律用 `herdr agent list` 回查事件 pane 自己的 `foreground_cwd`。
+
+**blocked 常是瞬态。** 自批准型 agent 会短暂经过这个状态，所以延迟后重读一次实时状态，已经继续执行就不推。
+
+## 尚未实现
+
+- `cooldown` 同 pane 同类去重
 - `min_turn_seconds` 过滤过短的 turn
 - workspace/tab/agent 的 include/exclude 通配过滤
 - 推送失败重试与重投队列（现在只写 stderr，不影响 Herdr）
-- 双向回复（Bark 本身只支持单向推送）
+- 双向回复（Bark 只支持单向推送）
 
 ## 验证
-
-无网络、无副作用的用例检查：
 
 ```bash
 HERDR_PLUGIN_STATE_DIR=/tmp/y \
