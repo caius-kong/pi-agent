@@ -30,28 +30,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import test from "node:test";
+import { resolveDep } from "./resolve-dep.mjs";
 
 // The scripted provider never reaches the network; keep pi from trying either.
 process.env.PI_OFFLINE = "1";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PNPM_GLOBAL = path.join(os.homedir(), "Library", "pnpm", "global", "v11");
-
-function resolveDep(prefix, inner) {
-  let entries = [];
-  try { entries = fs.readdirSync(PNPM_GLOBAL); } catch {}
-  for (const entry of entries) {
-    const store = path.join(PNPM_GLOBAL, entry, "node_modules", ".pnpm");
-    let names = [];
-    try { names = fs.readdirSync(store); } catch { continue; }
-    for (const name of names) {
-      if (!name.startsWith(prefix)) continue;
-      const candidate = path.join(store, name, "node_modules", inner);
-      if (fs.existsSync(candidate)) return candidate;
-    }
-  }
-  throw new Error(`Cannot locate ${prefix} in the local pnpm store`);
-}
 
 // agent-goal/index.ts resolves its bare specifiers from its own directory.
 function ensureDeps() {

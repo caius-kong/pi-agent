@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveDep } from "./resolve-dep.mjs";
 import { DEFAULT_CONFIG, registerAgentLoop, serializeForSummary, validateConfig, configFromSettings, band, pauseReason, readConfig, defaultSummarize, defaultJudge, assertCompleteSummary, IncompleteSummaryError, SUMMARY_END_MARKER } from "../agent/extensions/auto-agent-loop/controller.mjs";
 
 const COMPLETE_SUMMARY = `## 1. Goals\n- ship it\n\n## 2. Completed\n- wrote the code\n\n## 3. Remaining necessary work\n- run the regression suite\n\n## 4. Authorization and boundaries\n- no approval pending\n\n## 5. Unknowns\n- none\n\n${SUMMARY_END_MARKER}`;
@@ -464,22 +465,7 @@ test("Jev asks about authorized autonomous work, uses configured route/id, and r
 // this drives the real transport with a scripted fetch: a transient 504 recovers, an exhausted
 // retry still reports the provider error, and a permanent 4xx is never re-asked.
 test("a transient 504 on the Jev call is retried; exhausted retries and permanent 4xx still fail", async () => {
-  // Machine-local pnpm store, resolved at run time like agent-goal-state.test.mjs does: the
-  // retry under test must be the one that ships, not a copy of it in this file.
-  const resolveDep = (prefix, inner) => {
-    const storeRoot = join(process.env.HOME ?? "", "Library", "pnpm", "global", "v11");
-    let entries = []; try { entries = readdirSync(storeRoot); } catch {}
-    for (const entry of entries) {
-      const store = join(storeRoot, entry, "node_modules", ".pnpm");
-      let names = []; try { names = readdirSync(store); } catch { continue; }
-      for (const name of names) {
-        if (!name.startsWith(prefix)) continue;
-        const candidate = join(store, name, "node_modules", inner);
-        if (existsSync(candidate)) return candidate;
-      }
-    }
-    throw new Error(`Cannot locate ${prefix} in the local pnpm store`);
-  };
+  // The retry under test must be the one that ships, not a copy of it in this file.
   const api = await import(pathToFileURL(join(resolveDep("@earendil-works+pi-ai@", join("@earendil-works", "pi-ai")), "dist", "api", "typesafe-system-one.lazy.js")).href);
   const ctx = { modelRegistry: {
     findOfType: () => undefined,

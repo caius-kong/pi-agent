@@ -18,33 +18,15 @@
  * assertions see its wording in `index.ts` (scenario E).
  *
  * Run: node tests/agent-goal-state.test.mjs   (node >= 23.6 with --experimental-strip-types default)
- * Requires local node_modules symlinks to the pnpm store; auto-created below.
+ * Requires local node_modules symlinks to the resolved deps; auto-created below.
  */
 
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveDep } from "./resolve-dep.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// STORE paths are machine-local and change whenever pnpm rebuilds its virtual store,
-// so they are resolved at run time instead of being pinned to one hash directory.
-const PNPM_GLOBAL = path.join(os.homedir(), "Library", "pnpm", "global", "v11");
-function resolveDep(prefix, inner) {
-  let entries = [];
-  try { entries = fs.readdirSync(PNPM_GLOBAL); } catch {}
-  for (const entry of entries) {
-    const store = path.join(PNPM_GLOBAL, entry, "node_modules", ".pnpm");
-    let names = [];
-    try { names = fs.readdirSync(store); } catch { continue; }
-    for (const name of names) {
-      if (!name.startsWith(prefix)) continue;
-      const candidate = path.join(store, name, "node_modules", inner);
-      if (fs.existsSync(candidate)) return candidate;
-    }
-  }
-  throw new Error(`Cannot locate ${prefix} in the local pnpm store`);
-}
 
 // ── auto-link runtime deps of agent-goal/index.ts (typebox, pi-tui) ──────
 // agent-goal/index.ts resolves bare specifiers from ITS directory (agent/extensions),
@@ -66,7 +48,7 @@ function ensureDeps() {
     for (const [name, target] of targets) {
       const dest = path.join(nm, name);
       if (fs.existsSync(dest)) continue;
-      // existsSync is false for a dangling symlink left behind by an older pnpm store.
+      // existsSync is false for a dangling symlink left behind by an older install.
       fs.rmSync(dest, { force: true });
       fs.symlinkSync(target, dest, "dir");
     }
