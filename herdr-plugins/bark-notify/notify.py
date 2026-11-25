@@ -297,16 +297,47 @@ def session_context(info, cfg):
     return goal, reply
 
 
-def describe(data, context, info):
-    agent = (info.get("agent") or data.get("display_agent")
-             or data.get("agent") or "agent")
-    title = (info.get("terminal_title_stripped") or data.get("title") or "").strip()
+def workspace_label(workspace_id):
+    binary = os.environ.get("HERDR_BIN_PATH") or "herdr"
+    if not workspace_id:
+        return ""
+    try:
+        out = subprocess.run([binary, "workspace", "get", workspace_id],
+                             capture_output=True, text=True, timeout=10).stdout
+        return (json.loads(out)["result"]["workspace"].get("label") or "").strip()
+    except Exception:
+        return ""
+
+
+def agent_name(data, info):
+    return (info.get("agent") or data.get("display_agent")
+            or data.get("agent") or "agent")
+
+
+def location(data, context, info):
+    """Name the pane the way it was named in Herdr, not by its directory.
+
+    Several workspaces can share one cwd (every `~/.pi` session shows `.pi`), so
+    the renamed workspace label is the only part that tells them apart.
+    """
     cwd = info.get("foreground_cwd") or info.get("cwd") or context.get("workspace_cwd") or ""
-    repo = (context.get("worktree") or {}).get("repo_name", "")
-    branch = git_branch(cwd)
-    parts = [p for p in (title, repo, branch) if p]
-    where = " · ".join(parts) or (os.path.basename(cwd) if cwd else "")
-    return agent, where
+    parts = []
+
+    label = (context.get("workspace_label") or "").strip()
+    if not label:
+        label = workspace_label(data.get("workspace_id") or context.get("workspace_id"))
+    if not label:
+        label = (info.get("terminal_title_stripped") or data.get("title") or "").strip()
+    if label:
+        parts.append(label)
+
+    tab = (context.get("tab_label") or "").strip()
+    if tab and not tab.isdigit() and tab not in parts:
+        parts.append(tab)
+
+    parts.extend(p for p in ((context.get("worktree") or {}).get("repo_name", ""),
+                             git_branch(cwd)) if p)
+    return " · ".join(parts) or (os.path.basename(cwd) if cwd else "")
 
 
 def human(seconds):
@@ -377,7 +408,7 @@ def handle_event(cfg, state, dry_run=False, force=False):
 
     if not info:
         info = pane_info(pane_id)
-    agent, where = describe(data, context, info)
+    agent, where = agent_name(data, info), location(data, context, info)
     goal, reply = session_context(info, cfg)
     title = "{} {}".format(agent, LABELS[kind])
     if kind == "done":

@@ -1,6 +1,6 @@
 # herdr-bark
 
-把 Herdr 的 agent 状态变化推到 Bark（iOS）。405 行，纯 Python 标准库，零第三方依赖。
+把 Herdr 的 agent 状态变化推到 Bark（iOS）。     466 行，纯 Python 标准库，零第三方依赖。
 
 只用两个官方接口：Herdr 的 plugin event hook（`herdr-plugin.toml` 的 `[[events]]`）和 Bark 的 GET 推送接口。
 
@@ -20,7 +20,7 @@
 
 ```
 标题：pi 已完成
-正文：π - xbox - .pi · pi-config · main (2m05s)
+正文：t3code · main (2m05s)
       目标：把 herdr-bark 的免打扰改成工作日 9-12、14-18
       已完成，提交在 cf952d25，README 也同步更新了。
 ```
@@ -31,13 +31,13 @@
 
 | 行 | 来源 | 关闭方式 |
 |---|---|---|
-| 位置 | 终端标题 · 仓库 · 分支（· 耗时） | — |
+| 位置 | Herdr 里重命名的工作区标签 · 仓库 · 分支（· 耗时） | — |
 | 目标 | session 里最后一条 `agent-goal-state` 的 `goal`，没设 goal 时退到 `lastPrompt` | `BARK_GOAL_CHARS=0` |
 | 最后回复 | session 里最后一条 assistant 消息的文本 | `BARK_REPLY_CHARS=0` |
 
 两个 `_CHARS` 同时是截断长度。文本里的 Markdown 链接只留标题、`**` 和反引号去掉，所以手机上不会看到一串 URL。
 
-能取到哪些取决于 agent 是否向 Herdr 上报 session 文件（`agent_session.value`）。pi 会上报，codex 不报——codex 的推送只剩位置行，但它的终端标题本身就是任务描述。
+能取到哪些取决于 agent 是否向 Herdr 上报 session 文件（`agent_session.value`）。pi 会上报，codex 不报——codex 的推送只剩位置行，但它的工作区标签本身就是任务描述。
 
 ## 安装
 
@@ -101,6 +101,8 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 **事件里没有任务信息。** payload 的 `title` 只在有东西调用 `herdr pane report-metadata` 时才出现，agent 默认不填。所以通过 `herdr agent list` 回查该 pane，取 agent 类型、终端标题与 cwd，再用 `git rev-parse` 补分支。
 
 **`focused_pane_cwd` 不能直接用。** 它只在 `focused_pane_id` 等于事件 pane 时才可信；盯着 A pane 而 B pane 完成时，用它会报出 A 的目录。这里一律用 `herdr agent list` 回查事件 pane 自己的 `foreground_cwd`。
+
+**位置行用工作区标签，不用目录名。** 多个工作区可以共用一个 cwd（每个 `~/.pi` 会话都显示 `.pi`），只有重命名过的标签能区分它们。标签取自事件的 `workspace_label`；取不到时回查 `herdr workspace get`。tab 标签只有在不是纯数字且不同于工作区标签时才追加，因为默认的 `1` 没有信息量。
 
 **blocked 常是瞬态。** 自批准型 agent 会短暂经过这个状态，所以延迟后重读一次实时状态，已经继续执行就不推。
 
