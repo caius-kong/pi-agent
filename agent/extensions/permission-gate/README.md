@@ -1,6 +1,6 @@
 # permission-gate
 
-基于官方 `examples/extensions/permission-gate.ts`（仅 3 模式 + select 弹窗）深度改写。等待交互式审批时，经共享的 `agent/extensions/lib/system-notification.ts` 发送 `Glass` 通知；无 UI 或 hard-deny 导致命令直接阻断时保持静默。通知投递失败不影响命令安全拦截。
+基于官方 `examples/extensions/permission-gate.ts`（仅 3 模式 + select 弹窗）深度改写。只有在真实终端会话（`ctx.mode === "tui"`）里确实弹出审批弹窗、等待用户点击时，才经共享的 `agent/extensions/lib/system-notification.ts` 发送 `Glass` 通知。YOLO 自动放行、allowlist 命中、hard-deny、无 UI 直接阻断、以及非终端 UI（RPC、测试桩）全部静默。通知投递是 `await` 的，不会在弹窗已经结束后才落地；投递失败不影响命令安全拦截。
 
 ## 为什么需要它
 
@@ -61,4 +61,4 @@ YOLO 生效时 footer 显示 `yolo: on`（warning 色），未生效时什么都
 | 文件 | 作用 |
 |---|---|
 | `index.ts` | 入口（~415 行）：hard-deny 判定、YOLO 模式、footer `yolo: on` 指示、allowlist CRUD、git force-push 语义 |
-| `../lib/system-notification.ts` | 系统通知投递（仅交互式审批等待时播放 Glass 音效） |
+| `../lib/system-notification.ts` | 系统通知投递（仅真实终端会话的审批弹窗播放 Glass 音效） |

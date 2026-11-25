@@ -15,7 +15,9 @@
  * the user must re-allow if anything in the command string changes.
  *
  * A native OS notification is fired only when an interactive approval is
- * pending. Blocked commands that do not wait for user input stay silent.
+ * pending in a real terminal session (mode "tui"): commands blocked without
+ * waiting for the user, and prompts shown to a non-terminal UI (RPC, tests),
+ * stay silent.
  *
  * ── YOLO ─────────────────────────────────────────────────────────────
  * "This machine is unattended, execute autonomously."  Three ways in:
@@ -377,8 +379,15 @@ export default function (pi: ExtensionAPI) {
       };
     }
 
-    // Alert the user a live approval is pending (macOS banner, etc.).
-    void notifySystem("Pi: approval needed", oneLine(command), { sound: "Glass" });
+    // Alert the user a live approval is pending (macOS banner, etc.).  Only a
+    // real terminal session gets a banner: RPC shows the prompt through the
+    // client's own UI and tests stub the dialog, so a host-side banner there is
+    // noise.  The delivery is awaited so the banner cannot land after the prompt
+    // is gone (a fire-and-forget call races process teardown and falls back to
+    // the OS).
+    if (ctx.mode === "tui") {
+      await notifySystem("Pi: approval needed", oneLine(command), { sound: "Glass" });
+    }
 
     const choice = await ctx.ui.select(
       `⚠️  Dangerous command detected:\n\n  ${command}\n\nAllow this command?`,

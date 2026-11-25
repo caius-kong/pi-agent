@@ -29,7 +29,7 @@ function fakePi() {
   };
 }
 
-function context({ cwd = "~", choice = "YOLO - this session", hasUI = true } = {}) {
+function context({ cwd = "~", choice = "YOLO - this session", hasUI = true, mode = "tui" } = {}) {
   const notices = [];
   const statuses = new Map();
   let selectCount = 0;
@@ -38,6 +38,7 @@ function context({ cwd = "~", choice = "YOLO - this session", hasUI = true } = {
     statuses,
     get selectCount() { return selectCount; },
     cwd,
+    mode,
     hasUI,
     ui: {
       notify: (message, level) => notices.push({ message, level }),
@@ -114,7 +115,6 @@ test("choosing YOLO in the approval dialog confirms it and arms subsequent dange
       level: "info",
     }]);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(notifications.length, 1);
     assert.match(notifications[0].params.body, /rm -rf \/tmp\/permission-gate-test/);
 
@@ -153,8 +153,25 @@ test("does not notify when a command is blocked without waiting for approval", a
       ctx,
     );
     assert.equal(hardDenied?.block, true);
-    await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(notifications.length, 0);
+  });
+});
+
+test("does not notify for a prompt shown to a non-terminal UI", async () => {
+  await withHarness(async (notifications) => {
+    const { default: register } = await loadExtension();
+    const pi = fakePi();
+    register(pi);
+    const ctx = context({ mode: "rpc", choice: "No — block it" });
+
+    const result = await pi.handlers.get("tool_call")(
+      { toolName: "bash", input: { command: "rm -rf /tmp/permission-gate-test" } },
+      ctx,
+    );
+
+    assert.equal(result?.block, true);
+    assert.equal(ctx.selectCount, 1, "an RPC prompt still waits for the user");
+    assert.equal(notifications.length, 0, "no banner when the UI is not a terminal");
   });
 });
 
@@ -225,7 +242,6 @@ test("permission-gate.yolo=true in settings.json auto-approves without a dialog,
     );
     assert.equal(hardDenied?.block, true, "settings YOLO must not bypass the hard-deny floor");
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(notifications.length, 0);
   });
 });
