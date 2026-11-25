@@ -2,19 +2,19 @@
 
 | 任务 | 调度 | 入口 | 产出 |
 |---|---|---|---|
-| 每日晨报（凭据到期 · 需回复/重要通知 · 科技热点） | `0 9 * * 1-5` | `agent/jobs/morning-brief.sh` | `jobs/YYYY-MM-DD.html`（自动用 Chrome 打开） |
+| 每日晨报（凭据到期 · 需回复/重要通知 · 科技热点） | `0 9 * * 1-5` | crontab 直接调 `pi` + `prompts/morning-brief.md` | `jobs/YYYY-MM-DD.html`（自动用 Chrome 打开） |
 
 ## Usage
 
 ### 依赖
 
 ```bash
-brew install coreutils steipete/tap/gogcli && gog auth login   # timeout / gog
-pi install npm:pi-subagents                                     # subagent（scout 查邮件 / researcher 查热点）
-pi install npm:pi-web-access                                    # web_search、fetch_content（子代理要用）
+brew install steipete/tap/gogcli && gog auth login   # gog
+pi install npm:pi-subagents                           # subagent（scout / researcher）
+pi install npm:pi-web-access                          # web_search、fetch_content
 ```
 
-另需 `pi`、`python3`、Google Chrome。
+另需 `pi`、`/usr/bin/python3`、Google Chrome。
 
 ### 配置
 
@@ -30,13 +30,19 @@ printf 'export GOG_KEYRING_BACKEND=file\nexport GOG_KEYRING_PASSWORD=%s\n' "$(op
 
 ### 安装
 
-```bash
-# 先手动跑一次（空环境 = cron 环境）：确认 jobs/YYYY-MM-DD.html 存在、grep -c 'class="error"' 为 0、<h2> 有 8 个
-env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/bin:/bin NO_OPEN=1 ~/.pi/agent/jobs/morning-brief.sh
+整条流水线就是一行 crontab，没有脚本：`pi` 读 prompt、子代理并行取数、模型直接输出整份 HTML，重定向落盘后打开 Chrome。
 
-# 装 crontab（必须在真实 Terminal 执行；沙箱化 agent 里会因 TCC 授权永久挂起）
-{ crontab -l 2>/dev/null; echo; printf '0 9 * * 1-5 %s/.pi/agent/jobs/morning-brief.sh >> %s/.pi/agent/jobs/logs/cron.log 2>&1\n' "$HOME" "$HOME"; } | crontab -
-crontab -l | tail -2
+```bash
+# 装（必须在真实 Terminal 执行；沙箱化 agent 里会因 TCC 授权永久挂起）
+crontab -l 2>/dev/null | grep -v 'jobs/prompts/morning-brief.md' > /tmp/ct; printf '0 9 * * 1-5 cd $HOME && export PATH=/opt/homebrew/bin:/usr/bin:/bin && mkdir -p $HOME/.pi/agent/jobs/logs && . $HOME/.pi/agent/jobs/gog.env && OUT=$HOME/.pi/agent/jobs/$(date +\\%%F).html && pi --print --no-session -ne -e $HOME/.pi/agent/npm/node_modules/pi-subagents -e $HOME/.pi/agent/npm/node_modules/pi-web-access --tools "subagent,bash" -- "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)" > "$OUT" 2>>$HOME/.pi/agent/jobs/logs/cron.log && ln -sf "$OUT" $HOME/.pi/agent/jobs/latest.html && grep -q "</html>" "$OUT" && open -a "Google Chrome" "file://$OUT" && find $HOME/.pi/agent/jobs -maxdepth 1 -name "*.html" -mtime +30 -delete\n' >> /tmp/ct && crontab /tmp/ct && crontab -l | tail -1
+
+# 验收：手动跑同一条命令（空环境 = cron 环境），然后检查产出
+env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/bin:/bin sh -c 'cd $HOME && . .pi/agent/jobs/gog.env && pi --print --no-session -ne -e $HOME/.pi/agent/npm/node_modules/pi-subagents -e $HOME/.pi/agent/npm/node_modules/pi-web-access --tools "subagent,bash" -- "$(cat .pi/agent/jobs/prompts/morning-brief.md)"' > /tmp/brief.html 2>/tmp/brief.err
+grep -c '<h2>' /tmp/brief.html        # 8
+grep -c 'class="error"' /tmp/brief.html   # 0
+head -1 /tmp/brief.html; tail -1 /tmp/brief.html   # <!doctype html> … </html>
 ```
 
-cron 需绝对路径、不加载 shell 配置（脚本自己 `export PATH`）。首次真实触发后要人眼确认 Chrome 被拉起——这是唯一无法提前自动验证的环节。
+cron 不加载 shell 配置，所以那一行自己 `export PATH` 并 `. gog.env`。
+模型侧偶尔整次返回空，产出会是空文件：`grep -q "</html>"` 会挡住打开，重跑一次即可。
+首次真实触发后要人眼确认 Chrome 被拉起——这是唯一无法提前自动验证的环节。
