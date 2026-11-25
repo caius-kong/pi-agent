@@ -1,6 +1,6 @@
 # herdr-bark
 
-把 Herdr 的 agent 状态变化推到 Bark（iOS）。**352 行，纯 Python 标准库，零第三方依赖。**
+把 Herdr 的 agent 状态变化推到 Bark（iOS）。**345 行，纯 Python 标准库，零第三方依赖。**
 
 只用 Herdr 官方的 plugin event hook（`herdr-plugin.toml` 的 `[[events]]`）和 Bark 官方的 GET 推送接口。
 
@@ -62,19 +62,18 @@ herdr plugin log list --plugin caius.bark-notify
 
 ## 配置
 
-按顺序读取，先找到的生效（同名键不覆盖），进程环境最后覆盖：
+配置**只有一个位置**：`~/.pi/herdr-plugins/bark-notify/.env`（gitignore 掉，mode 600）。
 
-1. **`<插件目录>/.env`**（本仓库内，已 gitignore；日常改这里）
-2. `herdr plugin config-dir caius.bark-notify/.env`（Herdr 管理的插件配置目录）
-3. `~/.env`（本机全局密钥文件，只挑 `BARK_*` 键）
+**没有回退链** —— 不读 `~/.env`，也不读 Herdr 的插件配置目录。这是故意的：`BARK_KEY` 只能存在一份，多位置自动优先级会让密钥在无意识的情况下被存两次。进程环境变量仍然覆盖（方便一次性测试），但那是运行时值，不是存储位置。
 
-`herdr plugin action invoke caius.bark-notify.status` 会打印实际命中的文件和当前是否处于免打扰。
+`herdr plugin action invoke caius.bark-notify.status` 会打印配置文件路径、key 是否存在、当前是否处于免打扰。
 
 ### 免打扰时段（quiet hours）
 
 在电脑前的时段不必推手机——那时候你看屏幕就行。
 
 ```bash
+BARK_QUIET_ENABLE=true                         # 总开关，false 时忽略下面所有设置
 BARK_QUIET_TZ=Asia/Shanghai
 BARK_QUIET_DAYS=mon-fri                        # 也支持 mon,tue,wed / sat-sun / fri-mon
 BARK_QUIET_HOURS=09:00-12:00,14:00-18:00       # 逗号分隔多段，支持跨天如 22:00-06:00
@@ -83,28 +82,25 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 
 区间左闭右开：`09:00` 开始静音，`12:00` 恢复。默认工作日 9-12、14-18 静音，其余时间照常推。
 
+`BARK_QUIET_ENABLE=false` 可以临时关掉整套免打扰而不用删时段（假期、出差、或者想让手机响一天）。
+
 **`BARK_QUIET_EXEMPT=blocked` 值得考虑**：免打扰的假设是「我在电脑前」，但你偶尔会临时离开。开了之后，审批请求仍会在工作日打扰你，其余类型静音。
 
 ### 全部配置项
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `BARK_KEY` | 必填 | Bark app 首页的 device key（现在放在 `~/.env`） |
+| `BARK_KEY` | 必填 | Bark app 首页的 device key |
 | `BARK_SERVER` | `https://api.day.app` | 自建 bark-server 改这里 |
 | `BARK_GROUP` | `herdr` | 通知分组 |
 | `BARK_LEVEL` | 空 | `active` / `timeSensitive` / `passive`；`timeSensitive` 可穿透专注模式 |
 | `BARK_SOUND` | 空 | 如 `alarm` |
 | `BARK_BLOCKED_DELAY` | `3` | blocked 后重查延迟秒数，`0` 关闭 |
+| `BARK_QUIET_ENABLE` | `true` | 免打扰总开关 |
 | `BARK_QUIET_TZ` | 系统时区 | 免打扰判断用的时区 |
 | `BARK_QUIET_DAYS` | 空（每天） | 免打扰生效的星期 |
 | `BARK_QUIET_HOURS` | 空（不静音） | 免打扰时段 |
 | `BARK_QUIET_EXEMPT` | 空 | 免打扰期间仍然推送的类型 |
-
-### 为什么密钥不在仓库里
-
-`BARK_KEY` 留在 `~/.env`（mode 600，与这台机器另外 122 个密钥放在一起）。仓库里的 `.env` 只放行为配置。
-
-把密钥搬进仓库的唯一好处是插件自包含，代价是密钥进了 git 工作树——只要 `.gitignore` 一次写错或有人 `git add -f` 就泄漏。要搬的话把 `BARK_KEY=` 那行复制到本目录 `.env` 即可，读取顺序保证它优先生效。
 
 ## 它不做什么
 
@@ -121,7 +117,7 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 无网络、无副作用的用例检查：
 
 ```bash
-HERDR_PLUGIN_CONFIG_DIR=/tmp/x HERDR_PLUGIN_STATE_DIR=/tmp/y \
+HERDR_PLUGIN_STATE_DIR=/tmp/y \
 HERDR_PLUGIN_EVENT_JSON='{"data":{"type":"pane_agent_status_changed","pane_id":"w1:p1","agent_status":"idle"}}' \
 python3 notify.py --dry-run
 ```
@@ -132,4 +128,4 @@ python3 notify.py --dry-run
 
 - 只读 `HERDR_PLUGIN_EVENT_JSON` / `HERDR_PLUGIN_CONTEXT_JSON` / `herdr agent list`，写一个 `state.json`
 - 唯一外部调用是 Bark 服务器，超时 10 秒；失败只写 stderr
-- 密钥只从 `.env` 读，不写进源码目录，也不出现在日志里
+- 密钥只从本目录 `.env` 读，不写进日志，也不进 git（`.gitignore` + mode 600）

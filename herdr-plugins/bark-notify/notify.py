@@ -11,22 +11,21 @@ Two things Herdr does not give you for free, handled here:
    `herdr agent list` to recover the agent kind, terminal title and cwd, then
    add the git branch.
 
-Config is read from the first of these that exists, later keys not overriding
-earlier ones, with the process environment winning last:
-
-    HERDR_PLUGIN_CONFIG_DIR/.env     (plugin-owned, preferred)
-    ~/.env                           (machine-wide secrets file)
+Config lives in exactly one file: `<plugin root>/.env`. There is no fallback
+chain, so the key cannot end up stored in two places by accident. Process
+environment still overrides, for one-off testing.
 
 Quiet hours silence pushes for the hours you are at the desk anyway:
 
+    BARK_QUIET_ENABLE=true
     BARK_QUIET_TZ=Asia/Shanghai
     BARK_QUIET_DAYS=mon-fri
     BARK_QUIET_HOURS=09:00-12:00,14:00-18:00
     BARK_QUIET_EXEMPT=          # kinds that still fire, e.g. "blocked"
 
 Recognised keys: BARK_KEY, BARK_SERVER, BARK_GROUP, BARK_LEVEL, BARK_SOUND,
-BARK_BLOCKED_DELAY, BARK_QUIET_TZ, BARK_QUIET_DAYS, BARK_QUIET_HOURS,
-BARK_QUIET_EXEMPT.
+BARK_BLOCKED_DELAY, BARK_QUIET_ENABLE, BARK_QUIET_TZ, BARK_QUIET_DAYS,
+BARK_QUIET_HOURS, BARK_QUIET_EXEMPT.
 """
 
 import json
@@ -40,13 +39,14 @@ from datetime import datetime
 from pathlib import Path
 
 STATE_DIR = Path(os.environ.get("HERDR_PLUGIN_STATE_DIR", "."))
-CONFIG_DIR = Path(os.environ.get("HERDR_PLUGIN_CONFIG_DIR", "."))
 PLUGIN_ROOT = Path(os.environ.get("HERDR_PLUGIN_ROOT") or Path(__file__).resolve().parent)
+CONFIG_FILE = PLUGIN_ROOT / ".env"
 STATE_FILE = STATE_DIR / "state.json"
 
 CONFIG_KEYS = ("BARK_KEY", "BARK_SERVER", "BARK_GROUP", "BARK_LEVEL",
-               "BARK_SOUND", "BARK_BLOCKED_DELAY", "BARK_QUIET_TZ",
-               "BARK_QUIET_DAYS", "BARK_QUIET_HOURS", "BARK_QUIET_EXEMPT")
+               "BARK_SOUND", "BARK_BLOCKED_DELAY", "BARK_QUIET_ENABLE",
+               "BARK_QUIET_TZ", "BARK_QUIET_DAYS", "BARK_QUIET_HOURS",
+               "BARK_QUIET_EXEMPT")
 
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
@@ -56,21 +56,13 @@ COMPLETION_PREV = ("working", "blocked")
 LABELS = {"blocked": "需要你", "done": "已完成", "unknown": "状态丢失", "exited": "已退出"}
 
 
-def env_files():
-    """Plugin root first, then Herdr's config dir, then the machine-wide file."""
-    return [PLUGIN_ROOT / ".env", CONFIG_DIR / ".env", Path.home() / ".env"]
-
-
 def load_config():
     cfg = {}
-    source = None
-    for path in env_files():
-        if not path.is_file():
-            continue
+    if CONFIG_FILE.is_file():
         try:
-            text = path.read_text(encoding="utf-8")
+            text = CONFIG_FILE.read_text(encoding="utf-8")
         except OSError:
-            continue
+            text = ""
         for raw in text.splitlines():
             line = raw.strip()
             if line.startswith("export "):
@@ -79,14 +71,12 @@ def load_config():
                 continue
             key, value = line.split("=", 1)
             key = key.strip()
-            if key in CONFIG_KEYS and key not in cfg:
+            if key in CONFIG_KEYS:
                 cfg[key] = value.strip().strip('"').strip("'")
-                source = source or path
     for key in CONFIG_KEYS:
         if os.environ.get(key):
             cfg[key] = os.environ[key]
-            source = "environment"
-    return cfg, source
+    return cfg
 
 
 def load_state():
@@ -147,6 +137,8 @@ def local_now(cfg):
 
 
 def in_quiet_hours(cfg, kind=None, now=None):
+    if cfg.get("BARK_QUIET_ENABLE", "true").strip().lower() in ("0", "false", "no", "off"):
+        return False
     spec = cfg.get("BARK_QUIET_HOURS", "").strip()
     if not spec:
         return False
@@ -170,8 +162,7 @@ def in_quiet_hours(cfg, kind=None, now=None):
 def push(cfg, title, body, dry_run=False):
     key = cfg.get("BARK_KEY")
     if not key:
-        print("BARK_KEY not found in " + " or ".join(str(p) for p in env_files()),
-              file=sys.stderr)
+        print("BARK_KEY missing in " + str(CONFIG_FILE), file=sys.stderr)
         return False
     server = cfg.get("BARK_SERVER", "https://api.day.app").rstrip("/")
     query = {"group": cfg.get("BARK_GROUP", "herdr")}
@@ -315,7 +306,7 @@ def handle_event(cfg, state, dry_run=False, force=False):
 
 
 def main(argv):
-    cfg, source = load_config()
+    cfg = load_config()
     action = argv[1] if len(argv) > 1 else None
     dry_run = "--dry-run" in argv
     force = "--force" in argv
@@ -325,13 +316,15 @@ def main(argv):
         return 0 if ok else 1
 
     if action == "status":
-        print("config source: {}".format(source or "none"))
-        for path in env_files():
-            print("  {} {}".format("✓" if path.is_file() else "·", path))
+        print("config:        {} {}".format(
+            "✓" if CONFIG_FILE.is_file() else "·", CONFIG_FILE))
         print("state:         {}".format(STATE_FILE))
         print("key set:       {}".format(bool(cfg.get("BARK_KEY"))))
         print("server:        {}".format(cfg.get("BARK_SERVER", "https://api.day.app")))
         print("group:         {}".format(cfg.get("BARK_GROUP", "herdr")))
+        print("quiet enabled: {}".format(
+            cfg.get("BARK_QUIET_ENABLE", "true").strip().lower()
+            not in ("0", "false", "no", "off")))
         print("quiet hours:   {} {} tz={}".format(
             cfg.get("BARK_QUIET_DAYS", "-") or "-",
             cfg.get("BARK_QUIET_HOURS", "-") or "-",
