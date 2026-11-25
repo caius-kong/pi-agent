@@ -1,6 +1,6 @@
 # herdr-bark
 
-把 Herdr 的 agent 状态变化推到 Bark（iOS）。**257 行，纯 Python 标准库，零第三方依赖。**
+把 Herdr 的 agent 状态变化推到 Bark（iOS）。**352 行，纯 Python 标准库，零第三方依赖。**
 
 只用 Herdr 官方的 plugin event hook（`herdr-plugin.toml` 的 `[[events]]`）和 Bark 官方的 GET 推送接口。
 
@@ -10,10 +10,11 @@
 
 | | zgxme 插件 | 本插件 |
 |---|---|---|
-| 行数 | ~2000（含 13 个 provider） | 257 |
+| 行数 | ~2000（含 13 个 provider） | 352 |
 | 依赖 | Python 3.9+，vendored tomli | 标准库 |
 | 渠道 | 11 个，无 Bark | Bark |
 | 覆盖的两个坑 | ✅ | ✅ |
+| 免打扰时段 | ✅ | ✅ |
 
 ## 覆盖了什么
 
@@ -61,25 +62,54 @@ herdr plugin log list --plugin caius.bark-notify
 
 ## 配置
 
-按顺序读取，先找到的生效，进程环境最后覆盖：
+按顺序读取，先找到的生效（同名键不覆盖），进程环境最后覆盖：
 
-1. `herdr plugin config-dir caius.bark-notify` 下的 `.env`（插件自有，推荐）
-2. `~/.env`（本机全局密钥文件，只挑 `BARK_*` 键）
+1. **`<插件目录>/.env`**（本仓库内，已 gitignore；日常改这里）
+2. `herdr plugin config-dir caius.bark-notify/.env`（Herdr 管理的插件配置目录）
+3. `~/.env`（本机全局密钥文件，只挑 `BARK_*` 键）
+
+`herdr plugin action invoke caius.bark-notify.status` 会打印实际命中的文件和当前是否处于免打扰。
+
+### 免打扰时段（quiet hours）
+
+在电脑前的时段不必推手机——那时候你看屏幕就行。
+
+```bash
+BARK_QUIET_TZ=Asia/Shanghai
+BARK_QUIET_DAYS=mon-fri                        # 也支持 mon,tue,wed / sat-sun / fri-mon
+BARK_QUIET_HOURS=09:00-12:00,14:00-18:00       # 逗号分隔多段，支持跨天如 22:00-06:00
+BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的类型，如 blocked
+```
+
+区间左闭右开：`09:00` 开始静音，`12:00` 恢复。默认工作日 9-12、14-18 静音，其余时间照常推。
+
+**`BARK_QUIET_EXEMPT=blocked` 值得考虑**：免打扰的假设是「我在电脑前」，但你偶尔会临时离开。开了之后，审批请求仍会在工作日打扰你，其余类型静音。
+
+### 全部配置项
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `BARK_KEY` | 必填 | Bark app 首页的 device key |
+| `BARK_KEY` | 必填 | Bark app 首页的 device key（现在放在 `~/.env`） |
 | `BARK_SERVER` | `https://api.day.app` | 自建 bark-server 改这里 |
 | `BARK_GROUP` | `herdr` | 通知分组 |
-| `BARK_LEVEL` | 空 | `active` / `timeSensitive` / `passive` |
+| `BARK_LEVEL` | 空 | `active` / `timeSensitive` / `passive`；`timeSensitive` 可穿透专注模式 |
 | `BARK_SOUND` | 空 | 如 `alarm` |
 | `BARK_BLOCKED_DELAY` | `3` | blocked 后重查延迟秒数，`0` 关闭 |
+| `BARK_QUIET_TZ` | 系统时区 | 免打扰判断用的时区 |
+| `BARK_QUIET_DAYS` | 空（每天） | 免打扰生效的星期 |
+| `BARK_QUIET_HOURS` | 空（不静音） | 免打扰时段 |
+| `BARK_QUIET_EXEMPT` | 空 | 免打扰期间仍然推送的类型 |
+
+### 为什么密钥不在仓库里
+
+`BARK_KEY` 留在 `~/.env`（mode 600，与这台机器另外 122 个密钥放在一起）。仓库里的 `.env` 只放行为配置。
+
+把密钥搬进仓库的唯一好处是插件自包含，代价是密钥进了 git 工作树——只要 `.gitignore` 一次写错或有人 `git add -f` 就泄漏。要搬的话把 `BARK_KEY=` 那行复制到本目录 `.env` 即可，读取顺序保证它优先生效。
 
 ## 它不做什么
 
 以下 zgxme 插件有、本插件**没有**（需要时再加，各约 5-10 行）：
 
-- `quiet_hours` 免打扰时段
 - `cooldown_seconds` 同 pane 同类去重
 - `min_turn_seconds` 过滤过短的 turn
 - workspace/tab/agent 的 include/exclude 通配过滤
@@ -96,7 +126,7 @@ HERDR_PLUGIN_EVENT_JSON='{"data":{"type":"pane_agent_status_changed","pane_id":"
 python3 notify.py --dry-run
 ```
 
-`--dry-run` 打印将要请求的 URL（key 已脱敏）。
+`--dry-run` 打印将要请求的 URL（key 已脱敏）。`--force` 绕过免打扰，用于手动验证。
 
 ## 安全边界
 

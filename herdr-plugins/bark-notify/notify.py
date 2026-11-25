@@ -17,8 +17,16 @@ earlier ones, with the process environment winning last:
     HERDR_PLUGIN_CONFIG_DIR/.env     (plugin-owned, preferred)
     ~/.env                           (machine-wide secrets file)
 
+Quiet hours silence pushes for the hours you are at the desk anyway:
+
+    BARK_QUIET_TZ=Asia/Shanghai
+    BARK_QUIET_DAYS=mon-fri
+    BARK_QUIET_HOURS=09:00-12:00,14:00-18:00
+    BARK_QUIET_EXEMPT=          # kinds that still fire, e.g. "blocked"
+
 Recognised keys: BARK_KEY, BARK_SERVER, BARK_GROUP, BARK_LEVEL, BARK_SOUND,
-BARK_BLOCKED_DELAY.
+BARK_BLOCKED_DELAY, BARK_QUIET_TZ, BARK_QUIET_DAYS, BARK_QUIET_HOURS,
+BARK_QUIET_EXEMPT.
 """
 
 import json
@@ -28,14 +36,19 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 STATE_DIR = Path(os.environ.get("HERDR_PLUGIN_STATE_DIR", "."))
 CONFIG_DIR = Path(os.environ.get("HERDR_PLUGIN_CONFIG_DIR", "."))
+PLUGIN_ROOT = Path(os.environ.get("HERDR_PLUGIN_ROOT") or Path(__file__).resolve().parent)
 STATE_FILE = STATE_DIR / "state.json"
 
 CONFIG_KEYS = ("BARK_KEY", "BARK_SERVER", "BARK_GROUP", "BARK_LEVEL",
-               "BARK_SOUND", "BARK_BLOCKED_DELAY")
+               "BARK_SOUND", "BARK_BLOCKED_DELAY", "BARK_QUIET_TZ",
+               "BARK_QUIET_DAYS", "BARK_QUIET_HOURS", "BARK_QUIET_EXEMPT")
+
+DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 # idle only counts as a completion when the pane was actually busy before.
 COMPLETION_PREV = ("working", "blocked")
@@ -44,7 +57,8 @@ LABELS = {"blocked": "需要你", "done": "已完成", "unknown": "状态丢失"
 
 
 def env_files():
-    return [CONFIG_DIR / ".env", Path.home() / ".env"]
+    """Plugin root first, then Herdr's config dir, then the machine-wide file."""
+    return [PLUGIN_ROOT / ".env", CONFIG_DIR / ".env", Path.home() / ".env"]
 
 
 def load_config():
@@ -85,6 +99,72 @@ def load_state():
 def save_state(state):
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+
+
+def parse_days(spec):
+    days = set()
+    for part in spec.lower().replace(" ", "").split(","):
+        if not part:
+            continue
+        if "-" in part:
+            start, end = part.split("-", 1)
+            first, last = DAY_NAMES.index(start[:3]), DAY_NAMES.index(end[:3])
+            if first <= last:
+                days.update(range(first, last + 1))
+            else:  # wrap, e.g. fri-mon
+                days.update(range(first, 7))
+                days.update(range(0, last + 1))
+        else:
+            days.add(DAY_NAMES.index(part[:3]))
+    return days
+
+
+def parse_windows(spec):
+    windows = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        start, end = part.split("-", 1)
+        windows.append((parse_hhmm(start), parse_hhmm(end)))
+    return windows
+
+
+def parse_hhmm(value):
+    hour, _, minute = value.strip().partition(":")
+    return int(hour) * 60 + int(minute or 0)
+
+
+def local_now(cfg):
+    tz = cfg.get("BARK_QUIET_TZ", "").strip()
+    if tz:
+        try:
+            from zoneinfo import ZoneInfo
+            return datetime.now(ZoneInfo(tz))
+        except Exception:
+            pass
+    return datetime.now()
+
+
+def in_quiet_hours(cfg, kind=None, now=None):
+    spec = cfg.get("BARK_QUIET_HOURS", "").strip()
+    if not spec:
+        return False
+    exempt = {p.strip().lower() for p in cfg.get("BARK_QUIET_EXEMPT", "").split(",") if p.strip()}
+    if kind and kind.lower() in exempt:
+        return False
+    now = now or local_now(cfg)
+    days = cfg.get("BARK_QUIET_DAYS", "").strip()
+    if days and now.weekday() not in parse_days(days):
+        return False
+    minute = now.hour * 60 + now.minute
+    for start, end in parse_windows(spec):
+        if start <= end:
+            if start <= minute < end:
+                return True
+        elif minute >= start or minute < end:  # crosses midnight
+            return True
+    return False
 
 
 def push(cfg, title, body, dry_run=False):
@@ -163,7 +243,7 @@ def human(seconds):
     return "{}m{:02d}s".format(int(seconds // 60), int(seconds % 60))
 
 
-def handle_event(cfg, state, dry_run=False):
+def handle_event(cfg, state, dry_run=False, force=False):
     envelope = json.loads(os.environ.get("HERDR_PLUGIN_EVENT_JSON", "{}"))
     data = envelope.get("data", {})
     context = json.loads(os.environ.get("HERDR_PLUGIN_CONTEXT_JSON", "{}"))
@@ -216,6 +296,11 @@ def handle_event(cfg, state, dry_run=False):
     if not kind:
         return 0
 
+    if not force and in_quiet_hours(cfg, kind):
+        print("quiet hours {}, suppressed {}".format(
+            cfg.get("BARK_QUIET_HOURS", ""), kind))
+        return 0
+
     if not info:
         info = pane_info(pane_id)
     agent, where = describe(data, context, info)
@@ -233,6 +318,7 @@ def main(argv):
     cfg, source = load_config()
     action = argv[1] if len(argv) > 1 else None
     dry_run = "--dry-run" in argv
+    force = "--force" in argv
 
     if action == "test":
         ok = push(cfg, "herdr-bark 测试", "配置正确，推送链路通畅。", dry_run=dry_run)
@@ -246,11 +332,20 @@ def main(argv):
         print("key set:       {}".format(bool(cfg.get("BARK_KEY"))))
         print("server:        {}".format(cfg.get("BARK_SERVER", "https://api.day.app")))
         print("group:         {}".format(cfg.get("BARK_GROUP", "herdr")))
+        print("quiet hours:   {} {} tz={}".format(
+            cfg.get("BARK_QUIET_DAYS", "-") or "-",
+            cfg.get("BARK_QUIET_HOURS", "-") or "-",
+            cfg.get("BARK_QUIET_TZ", "-") or "-"))
+        print("quiet exempt:  {}".format(cfg.get("BARK_QUIET_EXEMPT", "-") or "-"))
+        now = local_now(cfg)
+        print("now:           {} {}".format(
+            now.strftime("%a %H:%M"),
+            "QUIET" if in_quiet_hours(cfg) else "active"))
         for pane, entry in load_state().get("panes", {}).items():
             print("  {} -> {}".format(pane, entry.get("status")))
         return 0
 
-    return handle_event(cfg, load_state(), dry_run=dry_run)
+    return handle_event(cfg, load_state(), dry_run=dry_run, force=force)
 
 
 if __name__ == "__main__":
