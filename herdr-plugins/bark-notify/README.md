@@ -1,6 +1,6 @@
 # herdr-bark
 
-把 Herdr 的 agent 状态变化推到 Bark（iOS）。          456 行，纯 Python 标准库，零第三方依赖。
+把 Herdr 的 agent 状态变化推到 Bark（iOS）。               503 行，纯 Python 标准库，零第三方依赖。
 
 只用两个官方接口：Herdr 的 plugin event hook（`herdr-plugin.toml` 的 `[[events]]`）和 Bark 的 GET 推送接口。
 
@@ -86,6 +86,10 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 ```
 
 区间左闭右开：`09:00` 开始静音，`12:00` 恢复。默认工作日 9-12、14-18 静音，其余时间照常推。
+
+`BARK_QUIET_DAYS` 判的是**当前时刻的星期**，所以 `22:00-06:00` + `mon-fri` 只覆盖周一到周五的晚上，周五深夜那段周六 0-6 点不静音。要覆盖就写成 `mon-sat`。
+
+时段写错（中文破折号、漏掉 `-`、星期名拼错）不会被静默忽略：插件在 stderr 报警并按「不静音」处理，不会因为一个字符手误就再也收不到通知。
 
 `BARK_QUIET_ENABLE=false` 临时关掉整套免打扰而不删时段，适合假期或出差。
 

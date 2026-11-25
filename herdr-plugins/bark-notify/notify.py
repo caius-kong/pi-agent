@@ -8,8 +8,8 @@ Two things Herdr does not give you for free, handled here:
    status per pane and treat `working|blocked -> idle` as a completion.
 2. The event payload carries no task context (`title` is only present when
    something calls `herdr pane report-metadata`). We re-read the pane through
-   `herdr agent list` to recover the agent kind, terminal title and cwd, then
-   add the git branch.
+   `herdr agent list` to recover the agent kind, terminal title and the session
+   transcript path.
 
 Config lives in exactly one file: `<plugin root>/.env`. There is no fallback
 chain, so the key cannot end up stored in two places by accident. Process
@@ -86,13 +86,39 @@ def load_config():
 def load_state():
     try:
         return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError):
         return {"panes": {}}
 
 
 def save_state(state):
+    """Write through a temp file: a reader must never see a half-written file."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp = STATE_FILE.with_name(STATE_FILE.name + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    os.replace(tmp, STATE_FILE)
+
+
+def persist(state):
+    """Losing state is survivable; losing the push because state failed is not."""
+    try:
+        save_state(state)
+    except OSError as exc:
+        print("herdr-bark: state write failed: {}".format(exc), file=sys.stderr)
+
+
+def state_lock():
+    """Herdr may run several hooks at once; load-modify-save needs a lock."""
+    try:
+        import fcntl
+    except ImportError:
+        return None
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        handle = open(STATE_DIR / "state.lock", "w")
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        return handle
+    except OSError:
+        return None
 
 
 def parse_days(spec):
@@ -150,11 +176,18 @@ def in_quiet_hours(cfg, kind=None, now=None):
     if kind and kind.lower() in exempt:
         return False
     now = now or local_now(cfg)
-    days = cfg.get("BARK_QUIET_DAYS", "").strip()
-    if days and now.weekday() not in parse_days(days):
+    try:
+        days = cfg.get("BARK_QUIET_DAYS", "").strip()
+        if days and now.weekday() not in parse_days(days):
+            return False
+        windows = parse_windows(spec)
+    except (ValueError, IndexError) as exc:
+        # A typo must not silence every future notification.
+        print("herdr-bark: bad quiet-hours config ({}), treating as not quiet".format(exc),
+              file=sys.stderr)
         return False
     minute = now.hour * 60 + now.minute
-    for start, end in parse_windows(spec):
+    for start, end in windows:
         if start <= end:
             if start <= minute < end:
                 return True
@@ -269,7 +302,11 @@ def session_context(info, cfg):
     path = (info.get("agent_session") or {}).get("value")
     want_reply = as_int(cfg.get("BARK_REPLY_CHARS"), 200)
     want_goal = as_int(cfg.get("BARK_GOAL_CHARS"), 120)
-    if not path or (want_reply <= 0 and want_goal <= 0):
+    # Only JSONL transcripts: the path is announced by the agent, and reading
+    # whatever it names would make this a file-exfiltration channel.
+    if not path or not str(path).endswith(".jsonl"):
+        return "", ""
+    if want_reply <= 0 and want_goal <= 0:
         return "", ""
 
     reply = goal = ""
@@ -369,11 +406,13 @@ def handle_event(cfg, state, dry_run=False, force=False):
     # blocked is often transient: agents that auto-approve pass straight through.
     info = {}
     if kind == "blocked" and not dry_run:
-        delay = as_int(cfg.get("BARK_BLOCKED_DELAY"), 3)
+        delay = max(0, min(as_int(cfg.get("BARK_BLOCKED_DELAY"), 3), 30))
         if delay > 0:
             time.sleep(delay)
             info = pane_info(pane_id)
-            if info.get("agent_status") != "blocked":
+            # Only a real "not blocked" cancels: an unreadable status must not
+            # swallow the one kind of notification that actually needs you.
+            if info and info.get("agent_status") != "blocked":
                 kind = None
 
     if not kind:
@@ -381,7 +420,7 @@ def handle_event(cfg, state, dry_run=False, force=False):
             entry["status"] = status
             entry["seen_at"] = int(time.time())
             panes[pane_id] = entry
-            save_state(state)
+            persist(state)
         return 0
 
     if not force and in_quiet_hours(cfg, kind):
@@ -391,7 +430,7 @@ def handle_event(cfg, state, dry_run=False, force=False):
     else:
         notify = True
 
-    if notify and not info:
+    if notify and kind != "exited" and not info:
         info = pane_info(pane_id)
 
     agent = agent_name(data, info, entry)
@@ -401,7 +440,10 @@ def handle_event(cfg, state, dry_run=False, force=False):
         entry["status"] = status
         entry["seen_at"] = int(time.time())
     panes[pane_id] = entry
-    save_state(state)
+    if event_type == "pane_closed":
+        # The id may be reused by a new pane; do not hand it this pane's history.
+        panes.pop(pane_id, None)
+    persist(state)
 
     if not notify:
         return 0
@@ -447,7 +489,12 @@ def main(argv):
         return 0
 
     try:
-        return handle_event(cfg, load_state(), dry_run=dry_run, force=force)
+        lock = state_lock()
+        try:
+            return handle_event(cfg, load_state(), dry_run=dry_run, force=force)
+        finally:
+            if lock:
+                lock.close()  # releases the flock
     except Exception as exc:  # a hook that raises is a hook that stops notifying
         print("herdr-bark: {}".format(exc), file=sys.stderr)
         return 0
