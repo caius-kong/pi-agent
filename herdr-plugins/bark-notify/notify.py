@@ -207,17 +207,6 @@ def pane_info(pane_id):
     return {}
 
 
-def git_branch(cwd):
-    if not cwd:
-        return ""
-    try:
-        done = subprocess.run(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
-                              capture_output=True, text=True, timeout=5)
-        return done.stdout.strip() if done.returncode == 0 else ""
-    except Exception:
-        return ""
-
-
 def as_int(value, default):
     try:
         return int(str(value).strip())
@@ -287,7 +276,7 @@ def session_context(info, cfg):
     for entry in reversed(read_session_tail(path)):
         if not goal and want_goal > 0 and entry.get("customType") == "agent-goal-state":
             data = entry.get("data") or {}
-            goal = clip(data.get("goal") or data.get("lastPrompt") or "", want_goal)
+            goal = clip(data.get("goal") or "", want_goal)
         if not reply and want_reply > 0 and entry.get("type") == "message":
             message = entry.get("message") or {}
             if message.get("role") == "assistant":
@@ -309,43 +298,45 @@ def workspace_label(workspace_id):
         return ""
 
 
-def agent_name(data, info):
-    return (info.get("agent") or data.get("display_agent")
-            or data.get("agent") or "agent")
+def agent_name(data, info, entry):
+    """Falls back to the last name seen for this pane: on pane.exited the agent
+    is already gone from `agent list`, and "agent 已退出" says nothing."""
+    name = (info.get("agent") or data.get("display_agent") or data.get("agent")
+            or entry.get("agent") or "")
+    return str(name).strip() or "agent"
 
 
-def location(data, context, info):
+def location(data, context):
     """Name the pane the way it was named in Herdr, not by its directory.
 
     Several workspaces can share one cwd (every `~/.pi` session shows `.pi`), so
-    the renamed workspace label is the only part that tells them apart.
+    the renamed workspace label is the only part that tells them apart. Ends at
+    the pane id, which the event always carries, so this is never empty.
     """
-    cwd = info.get("foreground_cwd") or info.get("cwd") or context.get("workspace_cwd") or ""
-    parts = []
-
     label = (context.get("workspace_label") or "").strip()
     if not label:
         label = workspace_label(data.get("workspace_id") or context.get("workspace_id"))
     if not label:
-        label = (info.get("terminal_title_stripped") or data.get("title") or "").strip()
-    if label:
-        parts.append(label)
-
-    tab = (context.get("tab_label") or "").strip()
-    if tab and not tab.isdigit() and tab not in parts:
-        parts.append(tab)
-
-    parts.extend(p for p in ((context.get("worktree") or {}).get("repo_name", ""),
-                             git_branch(cwd)) if p)
-    return " · ".join(parts) or (os.path.basename(cwd) if cwd else "")
+        tab = (context.get("tab_label") or "").strip()
+        label = tab if tab and not tab.isdigit() else ""
+    return label or (data.get("pane_id") or "")
 
 
-def human(seconds):
-    if not seconds or seconds < 0:
-        return ""
-    if seconds < 60:
-        return "{}s".format(int(seconds))
-    return "{}m{:02d}s".format(int(seconds // 60), int(seconds % 60))
+def task_text(cfg, info):
+    """What the agent is working on, in the richest form available.
+
+    Goal first, then the last assistant reply, then the terminal title. Each
+    source is optional: an agent may announce a session file (pi does), report
+    a task title (codex does), neither, or both. Anything missing yields an
+    empty string rather than an error.
+    """
+    goal, reply = session_context(info, cfg)
+    if goal:
+        return goal
+    if reply:
+        return reply
+    return clip(info.get("terminal_title_stripped") or "",
+                as_int(cfg.get("BARK_GOAL_CHARS"), 120))
 
 
 def handle_event(cfg, state, dry_run=False, force=False):
@@ -375,52 +366,48 @@ def handle_event(cfg, state, dry_run=False, force=False):
     else:
         kind = None
 
-    if status == "working":
-        entry["working_since"] = int(time.time())
-
     # blocked is often transient: agents that auto-approve pass straight through.
     info = {}
     if kind == "blocked" and not dry_run:
-        delay = float(cfg.get("BARK_BLOCKED_DELAY", "3") or 0)
+        delay = as_int(cfg.get("BARK_BLOCKED_DELAY"), 3)
         if delay > 0:
             time.sleep(delay)
             info = pane_info(pane_id)
             if info.get("agent_status") != "blocked":
                 kind = None
 
-    duration = ""
-    if kind in ("done", "unknown") and entry.get("working_since"):
-        duration = human(time.time() - entry["working_since"])
-
-    if status:
-        entry["status"] = status
-        entry["seen_at"] = int(time.time())
-        panes[pane_id] = entry
-    save_state(state)
-
     if not kind:
+        if status:
+            entry["status"] = status
+            entry["seen_at"] = int(time.time())
+            panes[pane_id] = entry
+            save_state(state)
         return 0
 
     if not force and in_quiet_hours(cfg, kind):
         print("quiet hours {}, suppressed {}".format(
             cfg.get("BARK_QUIET_HOURS", ""), kind))
+        notify = False
+    else:
+        notify = True
+
+    if notify and not info:
+        info = pane_info(pane_id)
+
+    agent = agent_name(data, info, entry)
+    if agent != "agent":
+        entry["agent"] = agent
+    if status:
+        entry["status"] = status
+        entry["seen_at"] = int(time.time())
+    panes[pane_id] = entry
+    save_state(state)
+
+    if not notify:
         return 0
 
-    if not info:
-        info = pane_info(pane_id)
-    agent, where = agent_name(data, info), location(data, context, info)
-    goal, reply = session_context(info, cfg)
-    title = "{} {}".format(agent, LABELS[kind])
-    if kind == "done":
-        stamp = " ({})".format(duration or time.strftime("%H:%M"))
-    else:
-        stamp = ""
-    lines = [(where + stamp) if where else (LABELS[kind] + stamp)]
-    if goal:
-        lines.append("目标：" + goal)
-    if reply:
-        lines.append(reply)
-    push(cfg, title, "\n".join(lines), dry_run=dry_run)
+    body = "\n".join(part for part in (location(data, context), task_text(cfg, info)) if part)
+    push(cfg, "{} {}".format(agent, LABELS[kind]), body, dry_run=dry_run)
     return 0
 
 
@@ -459,8 +446,11 @@ def main(argv):
             print("  {} -> {}".format(pane, entry.get("status")))
         return 0
 
-    return handle_event(cfg, load_state(), dry_run=dry_run, force=force)
-
+    try:
+        return handle_event(cfg, load_state(), dry_run=dry_run, force=force)
+    except Exception as exc:  # a hook that raises is a hook that stops notifying
+        print("herdr-bark: {}".format(exc), file=sys.stderr)
+        return 0
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

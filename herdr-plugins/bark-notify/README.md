@@ -1,6 +1,6 @@
 # herdr-bark
 
-把 Herdr 的 agent 状态变化推到 Bark（iOS）。     466 行，纯 Python 标准库，零第三方依赖。
+把 Herdr 的 agent 状态变化推到 Bark（iOS）。          456 行，纯 Python 标准库，零第三方依赖。
 
 只用两个官方接口：Herdr 的 plugin event hook（`herdr-plugin.toml` 的 `[[events]]`）和 Bark 的 GET 推送接口。
 
@@ -12,32 +12,47 @@
 | `agent_status` → `done` | 「<agent> 已完成」 | 未被查看的 pane 完成 |
 | `working`/`blocked` → `idle` | 「<agent> 已完成」 | 正在查看的 pane 完成 |
 | `done` → `idle` | 不推 | 同一次完成不重复 |
-| `working` | 不推 | 只记开始时间，用来算耗时 |
+| `working` | 不推 | |
 | `agent_status` → `unknown` | 「<agent> 状态丢失」 | 仅当上一状态是 working/blocked |
 | `pane.exited` / `pane.closed` | 「<agent> 已退出」 | |
 
-推送内容形如（正文三行：位置 · 目标 · 最后回复）：
+推送内容形如：
 
 ```
 标题：pi 已完成
-正文：t3code · main (2m05s)
-      目标：把 herdr-bark 的免打扰改成工作日 9-12、14-18
-      已完成，提交在 cf952d25，README 也同步更新了。
+正文：t3code
+      把 herdr-bark 的免打扰改成工作日 9-12、14-18，已提交。
 ```
 
 ## 正文内容
 
-正文最多三行，每行独立可关：
+正文固定两行，两行都可缺失，从不报错：
 
-| 行 | 来源 | 关闭方式 |
+| 行 | 来源 |
+|---|---|
+| 1 · 哪个 pane | Herdr 里重命名的工作区标签；取不到时依次退到非数字 tab 标签、pane id |
+| 2 · 在干什么 | `set_goal` 的内容 → 最后一条 assistant 消息 → agent 的终端标题 |
+
+第 2 行的优先级就是「最具体到最粗略」：有 goal 就是当前任务；没有 goal 就退到它最后说的话；连 transcript 都没有（如 codex）就用它自己写的终端标题。
+
+### 实测覆盖范围
+
+**目前只在 pi 和 codex 上实测过。** 两者拿到的数据不同：
+
+| | pi | codex |
 |---|---|---|
-| 位置 | Herdr 里重命名的工作区标签 · 仓库 · 分支（· 耗时） | — |
-| 目标 | session 里最后一条 `agent-goal-state` 的 `goal`，没设 goal 时退到 `lastPrompt` | `BARK_GOAL_CHARS=0` |
-| 最后回复 | session 里最后一条 assistant 消息的文本 | `BARK_REPLY_CHARS=0` |
+| 工作区标签 | ✅ | ✅ |
+| `agent_session` 路径 | ✅ 上报 | ❌ 不上报 |
+| `set_goal` | ✅ 有则用 | — |
+| 最后一条回复 | ✅ | — |
+| 终端标题 | `π - .pi`（无信息量） | `复核生产事故关键结论并继续调查`（就是任务） |
+| 实际第 2 行 | goal，否则最后一条回复 | 终端标题 |
 
-两个 `_CHARS` 同时是截断长度。文本里的 Markdown 链接只留标题、`**` 和反引号去掉，所以手机上不会看到一串 URL。
+其他 agent（claude、cursor、opencode、gemini……）没有验证过。代码里每个数据源都是「有就用，没有就跳过」：不上报 session 就没有 goal/回复，没有终端标题就没有第 2 行，连 agent 都查不到时标题退到上一次记下的名字。**任何一个数据源缺失都只会让某一行变短或消失，不会报错。**
 
-能取到哪些取决于 agent 是否向 Herdr 上报 session 文件（`agent_session.value`）。pi 会上报，codex 不报——codex 的推送只剩位置行，但它的工作区标签本身就是任务描述。
+### 截断与清洗
+
+`BARK_GOAL_CHARS` / `BARK_REPLY_CHARS` 同时是开关（`0` 关闭）和截断长度。文本里的 Markdown 链接只留标题、`**` 和反引号去掉，所以手机上不会看到一串 URL。
 
 ## 安装
 
@@ -86,8 +101,8 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 | `BARK_LEVEL` | 空 | `active` / `timeSensitive` / `passive`；`timeSensitive` 可穿透专注模式 |
 | `BARK_SOUND` | 空 | 如 `alarm` |
 | `BARK_BLOCKED_DELAY` | `3` | blocked 后重查延迟秒数，`0` 关闭 |
-| `BARK_REPLY_CHARS` | `200` | 最后回复的截断长度，`0` 不推这一行 |
-| `BARK_GOAL_CHARS` | `120` | 目标行的截断长度，`0` 不推这一行 |
+| `BARK_REPLY_CHARS` | `200` | 最后回复的截断长度，`0` 不取回复 |
+| `BARK_GOAL_CHARS` | `120` | goal / 终端标题的截断长度，`0` 不取 |
 | `BARK_QUIET_ENABLE` | `true` | 免打扰总开关 |
 | `BARK_QUIET_TZ` | 系统时区 | 免打扰判断用的时区 |
 | `BARK_QUIET_DAYS` | 空（每天） | 免打扰生效的星期 |
@@ -98,15 +113,15 @@ BARK_QUIET_EXEMPT=                             # 免打扰期间仍然推送的�
 
 **完成状态有两种。** Herdr 只在完成「未被查看」时报 `done`；正在看那个 pane 时，同一个事件以 `idle` 到达。只匹配 `done` 会静默丢弃这类完成，所以按 pane 记住上一状态，把 `working|blocked -> idle` 也判定为完成。
 
-**事件里没有任务信息。** payload 的 `title` 只在有东西调用 `herdr pane report-metadata` 时才出现，agent 默认不填。所以通过 `herdr agent list` 回查该 pane，取 agent 类型、终端标题与 cwd，再用 `git rev-parse` 补分支。
+**事件里没有任务信息。** payload 的 `title` 只在有东西调用 `herdr pane report-metadata` 时才出现，agent 默认不填。所以通过 `herdr agent list` 回查该 pane，取 agent 类型、终端标题和 `agent_session` 路径。
 
-**`focused_pane_cwd` 不能直接用。** 它只在 `focused_pane_id` 等于事件 pane 时才可信；盯着 A pane 而 B pane 完成时，用它会报出 A 的目录。这里一律用 `herdr agent list` 回查事件 pane 自己的 `foreground_cwd`。
-
-**位置行用工作区标签，不用目录名。** 多个工作区可以共用一个 cwd（每个 `~/.pi` 会话都显示 `.pi`），只有重命名过的标签能区分它们。标签取自事件的 `workspace_label`；取不到时回查 `herdr workspace get`。tab 标签只有在不是纯数字且不同于工作区标签时才追加，因为默认的 `1` 没有信息量。
+**位置行用工作区标签，不用目录名。** 多个工作区可以共用一个 cwd（每个 `~/.pi` 会话都显示 `.pi`），只有重命名过的标签能区分它们。标签取自事件的 `workspace_label`，取不到时回查 `herdr workspace get`；tab 标签只在不是纯数字时才当兜底，因为默认的 `1` 没有信息量。最后一层是事件里的 pane id，所以这一行永远不为空。
 
 **blocked 常是瞬态。** 自批准型 agent 会短暂经过这个状态，所以延迟后重读一次实时状态，已经继续执行就不推。
 
-**回复和目标是读 transcript，不是抓屏。** agent TUI 的最后几行永远是输入框和状态栏，抓屏拿不到回复。Herdr 在 `agent list` 里给出 `agent_session.value`（session 文件的绝对路径），所以直接读该 JSONL 末尾 256 KB，从后往前取最后一条 assistant 消息和最后一条 `agent-goal-state`。首行可能是截断的半行 JSON，解析失败就跳过。
+**回复和 goal 是读 transcript，不是抓屏。** agent TUI 的最后几行永远是输入框和状态栏，抓屏拿不到回复。Herdr 在 `agent list` 里给出 `agent_session.value`（session 文件的绝对路径），所以直接读该 JSONL 末尾 256 KB，从后往前取最后一条 assistant 消息和最后一条 `agent-goal-state`。首行可能是截断的半行 JSON，解析失败就跳过。
+
+**agent 消失后靠 state 记名字。** `pane.exited` 触发时 agent 已从 `agent list` 里消失，只靠事件只能叫「agent 已退出」。所以每次推送都把 agent 类型写进 `state.json`，退出事件用记下的名字。
 
 ## 尚未实现
 
@@ -128,6 +143,6 @@ python3 notify.py --dry-run
 
 ## 安全边界
 
-- 只读 `HERDR_PLUGIN_EVENT_JSON` / `HERDR_PLUGIN_CONTEXT_JSON` / `herdr agent list` / agent 自己的 session 文件，写一个 `state.json`
+- 只读 `HERDR_PLUGIN_EVENT_JSON` / `HERDR_PLUGIN_CONTEXT_JSON` / `herdr agent list` / `herdr workspace get` / agent 自己的 session 文件，写一个 `state.json`
 - 唯一外部调用是 Bark 服务器，超时 10 秒；失败只写 stderr
 - 密钥只从本目录 `.env` 读，不写进日志，也不进 git（`.gitignore` + mode 600）
