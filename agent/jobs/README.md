@@ -2,7 +2,7 @@
 
 | 任务 | 调度 | 入口 | 产出 |
 |---|---|---|---|
-| 每日晨报（凭据到期 · 需回复/重要通知 · 科技热点） | `0 9 * * 1-5` | crontab 调 `pi` + `prompts/morning-brief.md` | `jobs/YYYY-MM-DD.md` |
+| 每日晨报（凭据到期 · 需回复/重要通知 · 科技热点） | `0 9 * * 1-5` | crontab 调 `pi` + `prompts/morning-brief.md` | `jobs/YYYY-MM-DD.html`（agent 自己写盘并用 Chrome 打开） |
 
 ## Usage
 
@@ -14,7 +14,7 @@ pi install npm:pi-subagents                           # subagent（scout / resea
 pi install npm:pi-web-access                          # web_search、fetch_content
 ```
 
-另需 `pi`、`/usr/bin/python3`。
+另需 `pi`、`/usr/bin/python3`、Google Chrome。
 
 ### 配置
 
@@ -30,18 +30,20 @@ printf 'export GOG_KEYRING_BACKEND=file\nexport GOG_KEYRING_PASSWORD=%s\n' "$(op
 
 ### 安装
 
-整条流水线就是一行 crontab：`pi` 读 prompt，子代理并行取数，模型直接输出一份 Markdown 落到当天文件。
+整条流水线就是一行 crontab，没有脚本：`pi` 读 prompt，子代理并行取数，模型自己把整份 HTML 写到当天文件并打开。
 
 ```bash
 # 装（必须在真实 Terminal 执行；沙箱化 agent 里会因 TCC 授权永久挂起）
-crontab -l 2>/dev/null | grep -v 'jobs/prompts/morning-brief.md' > /tmp/ct; printf '0 9 * * 1-5 cd $HOME && export PATH=/opt/homebrew/bin:/usr/bin:/bin && mkdir -p $HOME/.pi/agent/jobs/logs && . $HOME/.pi/agent/jobs/gog.env && pi --print --no-session -ne -e $HOME/.pi/agent/npm/node_modules/pi-subagents -e $HOME/.pi/agent/npm/node_modules/pi-web-access --tools "subagent,bash" -- "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)" > $HOME/.pi/agent/jobs/$(date +\\%%F).md 2>>$HOME/.pi/agent/jobs/logs/cron.log\n' >> /tmp/ct && crontab /tmp/ct && crontab -l | tail -1
+crontab -l 2>/dev/null | grep -v 'jobs/prompts/morning-brief.md' > /tmp/ct; printf '0 9 * * 1-5 cd $HOME && export PATH=/opt/homebrew/bin:/usr/bin:/bin && mkdir -p $HOME/.pi/agent/jobs/logs && . $HOME/.pi/agent/jobs/gog.env && pi --print --no-session -ne -e $HOME/.pi/agent/npm/node_modules/pi-subagents -e $HOME/.pi/agent/npm/node_modules/pi-web-access --tools "subagent,bash" -- "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)" >> $HOME/.pi/agent/jobs/logs/cron.log 2>&1\n' >> /tmp/ct && crontab /tmp/ct && crontab -l | tail -1
 
-# 验收：手动跑同一条命令（空环境 = cron 环境），然后检查产出
-env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/bin:/bin sh -c 'cd $HOME && . .pi/agent/jobs/gog.env && pi --print --no-session -ne -e $HOME/.pi/agent/npm/node_modules/pi-subagents -e $HOME/.pi/agent/npm/node_modules/pi-web-access --tools "subagent,bash" -- "$(cat .pi/agent/jobs/prompts/morning-brief.md)"' > /tmp/brief.md 2>/tmp/brief.err
-head -1 /tmp/brief.md              # # 每日晨报 · YYYY-MM-DD
-grep -c '^## ' /tmp/brief.md       # 8
-grep -c '⚠️ 子代理未返回数据' /tmp/brief.md   # 0
+# 验收：手动跑同一条命令（空环境 = cron 环境），stdout 只应有一行「晨报已生成：<路径>」
+env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/bin:/bin sh -c 'cd $HOME && . .pi/agent/jobs/gog.env && pi --print --no-session -ne -e $HOME/.pi/agent/npm/node_modules/pi-subagents -e $HOME/.pi/agent/npm/node_modules/pi-web-access --tools "subagent,bash" -- "$(cat .pi/agent/jobs/prompts/morning-brief.md)"'
+f=~/.pi/agent/jobs/$(date +%F).html
+head -c 15 "$f"; echo            # <!doctype html>
+grep -c '<h2' "$f"               # 8
+grep -c 'class="error"' "$f"     # 0
+grep -c '_今日' "$f"              # 0（空态必须是 <p class="empty">，不能漏 Markdown 下划线）
 ```
 
 cron 不加载 shell 配置，所以那一行自己 `export PATH` 并 `. gog.env`。
-模型侧偶尔整次返回空，产出会是空文件，重跑一次即可。
+单次运行实测 100–600 秒（子代理冷启动 + 网关排队），cron 不做超时。
