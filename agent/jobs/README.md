@@ -19,11 +19,13 @@ pi install npm:pi-web-access                                    # web_search、f
 
 ```bash
 cd ~/.pi/agent/jobs
-cp credentials.example.json credentials.json   # sources[].regex 的第 1 个捕获组是 token
+cp credentials.example.json credentials.json   # locations[].regex 的第 1 个捕获组是 token
+printf 'export GOG_KEYRING_BACKEND=file\nexport GOG_KEYRING_PASSWORD=%s\n' "$(openssl rand -base64 18)" > gog.env && chmod 600 gog.env
 ```
 
-该文件不入库；到期日从 JWT 的 `exp` 解出，轮换后不用改。
+两个文件都不入库；到期日从 JWT 的 `exp` 解出，轮换后不用改。
 模型不配置：默认用 pi 的 `defaultProvider`/`defaultModel`；要覆盖就在环境里给 `MORNING_MODEL`。
+`gog.env` 是给 cron 用的：cron 读不到登录钥匙串，必须让 gog 走 file keyring，并用同一组环境变量把 token 导进去（`gog auth import --email <me> --refresh-token-stdin`）。
 
 ### 安装
 

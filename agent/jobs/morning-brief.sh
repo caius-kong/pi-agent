@@ -11,6 +11,9 @@ export PI_SKIP_VERSION_CHECK=1
 AGENT_DIR="$HOME/.pi/agent"
 JOBS_DIR="$AGENT_DIR/jobs"
 
+# gog 的 file keyring 凭据（cron 无法访问登录钥匙串，缺了 Gmail 板块会失败）
+[ -r "$JOBS_DIR/gog.env" ] && . "$JOBS_DIR/gog.env"
+
 PROMPT_DIR="$JOBS_DIR/prompts"
 WEB_EXT="$AGENT_DIR/npm/node_modules/pi-web-access"
 OUT_DIR="$JOBS_DIR"
@@ -90,7 +93,7 @@ TECH_HTML=$(run_job tech "🤖 科技热点" morning-tech.md "web_search,fetch_c
   table.cred tr:last-child td { border-bottom: 0; }
   table.cred td:nth-child(1) { white-space: nowrap; }
   table.cred td:nth-child(2) { white-space: nowrap; }
-  table.cred code { font-size: 12px; color: #3a3a3c; }
+  table.cred .loc { display: block; white-space: nowrap; font-size: 12px; color: #3a3a3c; }
   footer { margin-top: 36px; color: #a1a1a6; font-size: 12px; text-align: center; }
   @media (prefers-color-scheme: dark) {
     body { background: #1c1c1e; color: #f2f2f7; }
@@ -102,7 +105,7 @@ TECH_HTML=$(run_job tech "🤖 科技热点" morning-tech.md "web_search,fetch_c
     .bad { color: #ff6b6b; }
     table.cred th { color: #98989d; border-color: #2c2c2e; }
     table.cred td { border-color: #2c2c2e; }
-    table.cred code { color: #d1d1d6; }
+    table.cred .loc { color: #d1d1d6; }
   }
 </style>
 </head>
