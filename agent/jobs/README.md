@@ -15,7 +15,7 @@
 | 输出路径写死在 prompt 里 | 不写死则由模型自选目录，下游无法定位 |
 | 不加 `--no-session` | 没有 session 记录，ccusage 统计不到这次运行的费用 |
 | 扩展靠 `settings.json` 的 `packages` 默认加载 | 不在 crontab 里写 `-e <路径>`，那是重复配置 |
-| `PATH` 整条写进 crontab 顶部 | cron 不继承登录 shell 的 `PATH`；缺一条报「binary not found」，同名二进制散在多处时还会静默用错版本 |
+| `PATH` 写进 crontab 顶部，且必须是**短列表** | cron 不继承登录 shell 的 `PATH`；crontab 单行过长会被**静默丢弃**，整条 `PATH=` 失效 |
 | 其余环境变量放 `jobs/cron.env`（600，不入库） | cron 读不到登录钥匙串这类交互态资源 |
 | 日志重定向到 `jobs/logs/cron.log` | cron 自身没有输出通道 |
 
@@ -45,10 +45,12 @@ printf 'export GOG_KEYRING_BACKEND=file\nexport GOG_KEYRING_PASSWORD=%s\n' "$(op
 
 ### 安装
 
+cron 不继承登录 shell 的 `PATH`，退回 `/usr/bin:/bin`。但**不能把整个登录 `PATH` 搬进 crontab**：crontab 单行有长度上限，超了整条 `PATH=` 会被静默丢弃（表现为任务找不到 `pi`、`python3` 缺依赖包）。只列任务真正需要的目录。
+
 ```bash
 # 必须在真实 Terminal 执行：沙箱化 agent 里 crontab 写入会因 TCC 授权永久挂起
 crontab -l 2>/dev/null | grep -v '^PATH=' | grep -v 'jobs/prompts/morning-brief.md' > /tmp/ct
-printf 'PATH=%s\n' "$(echo "$PATH" | tr : '\n' | awk '!s[$0]++' | paste -sd:)" > /tmp/ct2
+printf 'PATH=%s\n' "$HOME/.pi/agent/bin:$HOME/.local/bin:$HOME/.pyenv/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" > /tmp/ct2
 cat /tmp/ct >> /tmp/ct2
 printf '0 9 * * 1-5 . $HOME/.pi/agent/jobs/cron.env && pi -p "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)" >> $HOME/.pi/agent/jobs/logs/cron.log 2>&1\n' >> /tmp/ct2
 crontab /tmp/ct2 && crontab -l | tail -1
