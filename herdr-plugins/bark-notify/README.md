@@ -48,18 +48,16 @@ pi 向 Herdr 上报 session 文件，所以能拿到 goal 与回复；codex 不�
 
 ```bash
 herdr plugin link ~/.pi/herdr-plugins/bark-notify
-herdr plugin action invoke caius.bark-notify.status
-herdr plugin action invoke caius.bark-notify.test
-herdr plugin log list --plugin caius.bark-notify
+herdr plugin action invoke bark-notify.status
+herdr plugin action invoke bark-notify.test
+herdr plugin log list --plugin bark-notify
 ```
 
-`link` 立即注册并开始跑 hook，不需要重启 server。卸载：`herdr plugin unlink caius.bark-notify`。
+`link` 立即注册并开始跑 hook，不需要重启 server。卸载：`herdr plugin unlink bark-notify`。
 
 ## 配置
 
-配置只有一个位置：`~/.pi/herdr-plugins/bark-notify/.env`（gitignore 掉，mode 600），从 `.env.example` 复制起步。
-
-没有回退链：不读 `~/.env`，也不读 Herdr 的插件配置目录。`BARK_KEY` 只存一份。进程环境变量仍可覆盖，那是运行时值，不是存储位置。
+配置只有一个位置：`~/.pi/herdr-plugins/bark-notify/.env`（gitignore 掉，mode 600），从 `.env.example` 复制起步。进程环境变量可覆盖文件值，用于一次性测试。
 
 ### 免打扰时段
 
