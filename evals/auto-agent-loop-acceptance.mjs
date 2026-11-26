@@ -70,7 +70,8 @@ try {
   await mkdir(sessions, { recursive: true });
 
   // The production controller, unmodified. Only the entry point differs: it supplies the
-  // config inline so the acceptance does not depend on the machine's settings.json.
+  // config inline so the acceptance does not depend on the machine's settings.json — the
+  // extension ships no model of its own, so both stages state their route here.
   await writeFile(path.join(extensions, "controller.mjs"), await readFile(path.join(extensionSource, "controller.mjs")));
   await writeFile(path.join(extensions, "index.ts"), `import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { existsSync } from "node:fs";
@@ -91,7 +92,7 @@ function typesafeSystemOne() {
 }
 export default function (pi: any) {
   registerAgentLoop(pi, {
-    getConfig: () => ({ ...DEFAULT_CONFIG, enabled: true, maxContinuations: 1, timeoutMs: 240_000 }),
+    getConfig: () => ({ ...DEFAULT_CONFIG, flash: { provider: "trendmicro", model: "deepseek-v4-flash-0731" }, jev: { provider: "trendmicro", model: "jev-1.13" }, enabled: true, maxContinuations: 1, timeoutMs: 240_000 }),
     loadTypesafeProvider: () => import(pathToFileURL(typesafeSystemOne()).href),
   });
 }

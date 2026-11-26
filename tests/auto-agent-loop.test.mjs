@@ -8,6 +8,8 @@ import { resolveDep } from "./resolve-dep.mjs";
 import { DEFAULT_CONFIG, registerAgentLoop, serializeForSummary, validateConfig, configFromSettings, band, pauseReason, readConfig, defaultSummarize, defaultJudge, assertCompleteSummary, IncompleteSummaryError, SUMMARY_END_MARKER } from "../agent/extensions/auto-agent-loop/controller.mjs";
 
 const COMPLETE_SUMMARY = `## 1. Goals\n- ship it\n\n## 2. Completed\n- wrote the code\n\n## 3. Remaining necessary work\n- run the regression suite\n\n## 4. Authorization and boundaries\n- no approval pending\n\n## 5. Unknowns\n- none\n\n${SUMMARY_END_MARKER}`;
+// The extension ships no model of its own, so every stage test states its route.
+const STAGES = { ...DEFAULT_CONFIG, flash: { provider: "custom", model: "flash" }, jev: { provider: "trendmicro", model: "jev-test" } };
 
 function setup(options = {}) {
   const handlers = {}, commands = {}, entries = [], notices = [], statuses = [], widgets = [];
@@ -332,9 +334,13 @@ test("verdict bands and pause reasons state the thresholds they compare against"
 });
 
 test("status exposes models, count, decision and latest summary; only new session state restores", async () => {
-  const s = setup(); await on(s); await settle(s);
+  const s = setup({ config: { ...STAGES, enabled: true } }); await on(s); await settle(s);
   await s.commands["auto-agent-loop"].handler("status", s.ctx);
-  assert.match(s.notices.at(-1), /deepseek/); assert.match(s.notices.at(-1), /jev/); assert.match(s.notices.at(-1), /run tests/);
+  assert.match(s.notices.at(-1), /Jev: trendmicro\/jev-test · Flash: custom\/flash/); assert.match(s.notices.at(-1), /run tests/);
+  // An unconfigured install says so instead of naming a model nobody chose.
+  const unconfigured = setup();
+  await unconfigured.commands["auto-agent-loop"].handler("status", unconfigured.ctx);
+  assert.match(unconfigured.notices.at(-1), /Jev: not configured · Flash: not configured/);
   const restored = setup(); restored.setBranch(s.entries); restored.handlers.session_start({}, restored.ctx);
   assert.equal(restored.controller.state.enabled, true);
 });
@@ -346,6 +352,10 @@ test("configuration lives in settings.json under auto-agent-loop and rejects bad
   assert.equal(validateConfig({ ...DEFAULT_CONFIG, maxContinuations: 8 }).maxContinuations, 8);
   assert.equal(DEFAULT_CONFIG.timeoutMs, 300_000);
   assert.deepEqual(configFromSettings({}), DEFAULT_CONFIG);
+  // Omitting a stage model leaves it unconfigured; the extension has no model of its own.
+  assert.deepEqual(configFromSettings({ "auto-agent-loop": {} }), DEFAULT_CONFIG);
+  assert.equal(configFromSettings({ "auto-agent-loop": { "flash-model": "c/f" } }).jev, null);
+  assert.equal(configFromSettings({ "auto-agent-loop": { "flash-model": "c/f" } }).flash.model, "f");
   assert.deepEqual(configFromSettings({ "auto-agent-loop": { "flash-model": "custom/flash", "jev-model": "custom/jev", "max-loop": 6 } }),
     { flash: { provider: "custom", model: "flash" }, jev: { provider: "custom", model: "jev" }, maxContinuations: 6, timeoutMs: 300_000, flashThinking: "high", enabled: false });
   assert.equal(configFromSettings({ "auto-agent-loop": { "flash-model": "c/f", "jev-model": "c/j", "timeout-ms": 600_000 } }).timeoutMs, 600_000);
@@ -374,6 +384,11 @@ test("configuration lives in settings.json under auto-agent-loop and rejects bad
     assert.equal(readConfig(path).maxContinuations, 6);
     assert.equal(readConfig(path).flash.model, "f");
   } finally { rmSync(dir, { recursive: true }); }
+});
+
+test("an unconfigured stage reports the missing setting instead of picking a model", async () => {
+  await assert.rejects(defaultSummarize("Transcript", {}, undefined, DEFAULT_CONFIG), /no flash-model configured/u);
+  await assert.rejects(defaultJudge("summary", {}, undefined, DEFAULT_CONFIG, async () => ({})), /no jev-model configured/u);
 });
 
 test("Flash uses exact configured model and rejects overflow, truncated output, and output of 20k tokens", async () => {
@@ -444,8 +459,8 @@ test("Jev asks about authorized autonomous work, uses configured route/id, and r
     getApiKeyForProvider: async () => "test-key",
   } };
   const load = async () => ({ typesafeSystemOneApi: () => ({ classify: async (...args) => { calls.push(args); return { stopReason: "stop", answers: { should_continue: { type: "bool", probability: 0.9 } } }; } }) });
-  await defaultJudge("Remaining authorized work: run tests", ctx, undefined, DEFAULT_CONFIG, load);
-  assert.equal(calls[0][0].id, DEFAULT_CONFIG.jev.model);
+  await defaultJudge("Remaining authorized work: run tests", ctx, undefined, STAGES, load);
+  assert.equal(calls[0][0].id, STAGES.jev.model);
   assert.match(calls[0][1].questions.should_continue.instructions, /authorized/i);
   assert.equal(calls[0][1].state.current_agent_state_summary, "Remaining authorized work: run tests");
   // The summary Flash produced is capped at 20k tokens by its own reported output, so
@@ -485,19 +500,19 @@ test("a transient 504 on the Jev call is retried; exhausted retries and permanen
   };
   try {
     let calls = script([gateway, gateway, answer]);
-    const result = await defaultJudge("Remaining authorized work: run tests", ctx, undefined, DEFAULT_CONFIG, load);
+    const result = await defaultJudge("Remaining authorized work: run tests", ctx, undefined, STAGES, load);
     assert.equal(result.answers.should_continue.probability, 0.9);
     assert.equal(calls.length, 3);
     assert.equal(calls[0], "https://example.invalid/api/systemone");
 
     calls = script([gateway]);
-    const exhausted = await defaultJudge("x", ctx, undefined, DEFAULT_CONFIG, load);
+    const exhausted = await defaultJudge("x", ctx, undefined, STAGES, load);
     assert.equal(exhausted.stopReason, "error");
     assert.match(exhausted.errorMessage, /System One API error \(504\)/u);
     assert.equal(calls.length, 3);
 
     calls = script([() => new Response("bad request", { status: 400 })]);
-    const permanent = await defaultJudge("x", ctx, undefined, DEFAULT_CONFIG, load);
+    const permanent = await defaultJudge("x", ctx, undefined, STAGES, load);
     assert.equal(permanent.stopReason, "error");
     assert.match(permanent.errorMessage, /System One API error \(400\)/u);
     assert.equal(calls.length, 1);

@@ -166,20 +166,20 @@ auto-agent-loop: ended · Probability(continue)=0.11 ≤ 0.20 · loop 0/3
 }
 ```
 
-上例即 `DEFAULT_CONFIG`（缺少 `auto-agent-loop` 键时的默认值）。本机 `settings.json` 另将 `flash-model` 设为 `trendmicro/deepseek-v4.1-flash`、`timeout-ms` 设为 `600000`，并**显式写出** `flash-thinking: "high"`：取值不靠缺省，避免“没写就是默认”与“没生效”分不清。
+上例只写了必填项 + 与默认值不同的项。**两个模型没有内置默认值**：扩展源码里不写任何 provider/model，`flash-model` 与 `jev-model` 缺省即为未配置，`/auto-agent-loop status` 显示 `not configured`，开启后第一次判定直接报 `no flash-model configured in settings.json`（或 jev 对应项），不会替你挑一个厂商模型。本机 `settings.json` 将 `flash-model` 设为 `trendmicro/deepseek-v4.1-flash`、`timeout-ms` 设为 `600000`，并**显式写出** `flash-thinking: "high"`：取值不靠缺省，避免“没写就是默认”与“没生效”分不清。
 
 | 键 | 说明 |
 |---|---|
 | `enable` | 布尔，默认 `false`；`true` 时每个 session 启动（含恢复）自动开启监控，等价于 `/auto-agent-loop on`。session 内 `/auto-agent-loop off` 仍然生效到该 session 结束，下次启动再按此设置开启 |
-| `flash-model` | `provider/model`，在第一个 `/` 处拆分 |
-| `jev-model` | 同上；已注册的 classifier 优先，否则走 provider 的 `/systemone` 路由 |
+| `flash-model` | 必填，`provider/model`，在第一个 `/` 处拆分 |
+| `jev-model` | 必填，同上；已注册的 classifier 优先，否则走 provider 的 `/systemone` 路由 |
 | `max-loop` | 非负整数，本请求最多自动续跑次数；`0` 仍判定但禁止续跑 |
 | `timeout-ms` | 正整数，默认 `300000`（5 分钟）；Flash + Jev 共用的总 deadline |
 | `flash-thinking` | Flash 总结的 thinking 档位，默认 `high`；取值为 Pi 的档位名（`off`/`minimal`/`low`/`medium`/`high`/`xhigh`/`max`），`off` 不发送 reasoning。该档位由 provider 映射成实际 effort，例如 deepseek 风格的网关会收到 `thinking: {type:"enabled"}` + `reasoning_effort` |
 
 Flash 的 thinking 与摘要正文共用 20k 输出上限（`max_completion_tokens`），所以档位越高，留给正文的预算越少；thinking token 同时计入输出计费。长会话里把档位调低是唯一不需要改代码的省成本方式。Jev 是 TypeSafe classifier（`/systemone` 的 state），没有 thinking 概念，不受该键影响。
 
-`controller.mjs` 中的 `DEFAULT_CONFIG` 是缺少 `auto-agent-loop` 键时的默认值。格式错误或显式模型不可用会直接报错（启动时写进 `status` 并告警一次），不静默 fallback、不自行换模型。续跑计数的重置规则见[熔断与重置（max-loop）](#熔断与重置max-loop)。
+`controller.mjs` 中的 `DEFAULT_CONFIG` 只保存与模型无关的默认值（`max-loop`、`timeout-ms`、`flash-thinking`、`enable`）；缺少 `auto-agent-loop` 键等价于未配置模型、监控关闭。格式错误或显式模型不可用会直接报错（启动时写进 `status` 并告警一次），不静默 fallback、不自行换模型。续跑计数的重置规则见[熔断与重置（max-loop）](#熔断与重置max-loop)。
 
 ## 实现
 
