@@ -8,6 +8,7 @@
 $HOME/.pi/agent/jobs/$(date +%F).html
 ```
 
+- 小节标题照拄下面章节名，不要改写：`KEYS`、`EMAILS`（下辖 `需要回复` / `重要通知` / `其余未读`）、`AI 热点`、`Hacker News`、`GitHub Trending`、`Simon Willison`。
 - 单文件、内联 `<style>`，按下面章节顺序分段，每节一个 `<h2>`，一节都不许省略。
 - 以 `<!doctype html>` 开头、`</html>` 结尾，不加代码围栏。
 - 写完用 `open -a "Google Chrome" "<刚写的那个路径>"` 打开它。
