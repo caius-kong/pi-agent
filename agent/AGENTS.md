@@ -36,7 +36,7 @@ When using a worktree:
 - Don't touch adjacent code/comments/formatting; match existing style. Mention (don't delete) unrelated dead code; remove only imports/vars/functions YOUR changes made unused.
 - **Transform tasks into verifiable goals: "Fix bug" → "Write a failing test, then make it pass."**
 
-# Documentation
+# Documentation Principles
 - Documentation must contain only current conclusions and the supporting information necessary to understand or apply them; review it sentence by sentence and delete prior states, accounts of changes, and one-off or expiring events and situational data, without preserving them in any other form.
 
 # Review Principles
