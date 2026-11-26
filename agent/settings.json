@@ -13,7 +13,7 @@
     "npm:@narumitw/pi-btw",
     "https://github.com/cathrynlavery/diagram-design",
     "npm:pi-cc-extensions",
-    "npm:@dietrichgebert/ponytail@5.1.0",
+    "npm:@dietrichgebert/ponytail",
     "https://github.com/ayghri/i-have-adhd"
   ],
   "sessionBudget": {
