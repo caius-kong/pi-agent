@@ -118,7 +118,7 @@ gog gmail archive --query 'is:unread category:promotions newer_than:1d' --max 50
 
 | 优先 | 事件 |
 |---|---|
-| 1 | 头部实验室发布/更新主力模型（OpenAI、Anthropic、Google DeepMind、Meta、xAI、Mistral 等） |
+| 1 | 头部实验室发布/更新主力模型（OpenAI、Anthropic、Google DeepMind、DeepSeek、GLM、Meta、xAI、Mistral 等） |
 | 2 | 政策、监管、诉讼、出口管制、重大并购 |
 | 3 | 影响面广的安全事件、大规模故障、行业标准变动 |
 | 4 | 一线媒体报的行业趋势（Reuters、Bloomberg、FT、WSJ、BBC、The Verge、TechCrunch） |
