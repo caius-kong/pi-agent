@@ -21,12 +21,12 @@ pi install npm:pi-web-access                          # web_search、fetch_conte
 ```bash
 cd ~/.pi/agent/jobs
 cp credentials.example.json credentials.json   # locations[].regex 的第 1 个捕获组是 token
-printf 'export GOG_KEYRING_BACKEND=file\nexport GOG_KEYRING_PASSWORD=%s\n' "$(openssl rand -base64 18)" > gog.env && chmod 600 gog.env
+printf 'export GOG_KEYRING_BACKEND=file\nexport GOG_KEYRING_PASSWORD=%s\nexport PATH="$HOME/.local/bin:$PATH"\n' "$(openssl rand -base64 18)" > cron.env && chmod 600 cron.env
 ```
 
 两个文件都不入库；到期日从 JWT 的 `exp` 解出，轮换后不用改。
 模型不配置：默认用 pi 的 `defaultProvider`/`defaultModel`；要覆盖就在环境里给 `MORNING_MODEL`。
-`gog.env` 是给 cron 用的：cron 读不到登录钥匙串，必须让 gog 走 file keyring，并用同一组环境变量把 token 导进去（`gog auth import --email <me> --refresh-token-stdin`）。
+`cron.env` 补 cron 缺的环境：cron 读不到登录钥匙串，gog 必须走 file keyring（密码要与 `gog auth import --email <me> --refresh-token-stdin` 时用的一致）；cron 的 `PATH` 也不含 `~/.local/bin`。
 
 ### 安装
 
@@ -35,10 +35,10 @@ printf 'export GOG_KEYRING_BACKEND=file\nexport GOG_KEYRING_PASSWORD=%s\n' "$(op
 
 ```bash
 # 装（必须在真实 Terminal 执行；沙箱化 agent 里会因 TCC 授权永久挂起）
-crontab -l 2>/dev/null | grep -v 'jobs/prompts/morning-brief.md' > /tmp/ct; printf '0 9 * * 1-5 . $HOME/.pi/agent/jobs/gog.env && pi -p --no-session "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)" >> $HOME/.pi/agent/jobs/logs/cron.log 2>&1\n' >> /tmp/ct && crontab /tmp/ct && crontab -l | tail -1
+crontab -l 2>/dev/null | grep -v 'jobs/prompts/morning-brief.md' > /tmp/ct; printf '0 9 * * 1-5 . $HOME/.pi/agent/jobs/cron.env && pi -p --no-session "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)" >> $HOME/.pi/agent/jobs/logs/cron.log 2>&1\n' >> /tmp/ct && crontab /tmp/ct && crontab -l | tail -1
 
 # 验收：手动跑同一条命令（空环境 = cron 环境），stdout 只应有一行「晨报已生成：<路径>」
-env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/bin:/bin sh -c '. $HOME/.pi/agent/jobs/gog.env && pi -p --no-session "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)"'
+env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/bin:/bin sh -c '. $HOME/.pi/agent/jobs/cron.env && pi -p --no-session "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)"'
 f=~/.pi/agent/jobs/$(date +%F).html
 head -c 15 "$f"; echo            # <!doctype html>
 grep -c '<h2' "$f"               # 6（EMAILS 下的三个子块是 h3）
@@ -47,5 +47,4 @@ grep -c '_今日' "$f"              # 0（空态必须是 <p class="empty">，�
 grep -cE 'KEYS|需要回复|重要通知|其余未读|AI 热点|Hacker News|GitHub Trending|Simon Willison' "$f"   # 8 个板块都在
 ```
 
-cron 不加载 shell 配置，所以那一行自己 `. gog.env`（gog 的 file keyring 需要这两个变量）。
-单次运行实测 100–600 秒（子代理冷启动 + 网关排队），cron 不做超时。
+cron 不加载 shell 配置，所以那一行自己 `. cron.env`。
