@@ -18,7 +18,7 @@ $HOME/.pi/agent/jobs/$(date +%F).html
 
 `AI 热点`、`Hacker News`、`Simon Willison` 三节只收**最近 24 小时**内发布的条目，窗口从运行时刻往回推 24 小时，不是「今天 0 点」。`GitHub Trending` 不适用（榜单本身即今日口径），`KEYS`、`EMAILS` 各有自己的规则。
 
-- 每条都带发布时间 `MM-DD HH:mm`，紧跟在标题后面。
+- 每条都带发布时间 `MM-DD HH:mm`，紧跟在标题后面。**写本地时间（UTC+8）**：页面/接口给的是 UTC 就先加 8 小时，跨天要改日期。
 - 拿不到发布时间 → 丢弃该条，不要猜、不要按返回顺序推。
 - 24 小时内不足 3 条 → 列实际条数，**不要用旧条目凑数**。
 - 一条都没有 → 该节写 `<p class="empty">过去 24 小时无更新</p>`。
@@ -110,13 +110,38 @@ gog gmail archive --query 'is:unread category:promotions newer_than:1d' --max 50
 
 用 `web_search` 取 AI 热点，`recencyFilter` 设为 `day`。工具调用 ≤ 4 次。**禁止使用训练数据、历史缓存或自行编造。**
 
-查询 `AI news today`，必要时补一条 `LLM release today`。只取**最近 24 小时**内发布的，按发布时间从新到旧挑 3 条：
+要的是**过去 24 小时里影响最大的 3 件事**，不是最近发布的 3 条。**按重要性选、按重要性排，不按时间选也不按时间排**（时间只用来证明新鲜）。
+
+查询至少覆盖两个角度，避免被单一角度的最新条目占满：`AI news today`，加一条 `AI model release announcement today` 或 `AI regulation lawsuit today`。
+
+什么算「大」，从高到低：
+
+| 优先 | 事件 |
+|---|---|
+| 1 | 头部实验室发布/更新主力模型（OpenAI、Anthropic、Google DeepMind、Meta、xAI、Mistral 等） |
+| 2 | 政策、监管、诉讼、出口管制、重大并购 |
+| 3 | 影响面广的安全事件、大规模故障、行业标准变动 |
+| 4 | 一线媒体报的行业趋势（Reuters、Bloomberg、FT、WSJ、BBC、The Verge、TechCrunch） |
+
+同一件事被 2 个以上独立来源报道 → 优先级提高。
+
+**低信号来源一律不收**（上一次三节全是这类，把真正的大事挤掉了）：
+
+| 不收 | 例 |
+|---|---|
+| 通稿分发 | `prnewswire.com`、`businesswire.com`、`globenewswire.com` |
+| AI 新闻摘要/搬运站 | 只转述别人报道、没有一手信息的聚合站 |
+| 政府/机构新闻稿 | `.gov` 类通告（正式法规除外） |
+| 厂商小版本号更新 | 1.0.1 这类营销博文 |
+
+其余规则：
 
 - 每条用结果自带的 `title` 和 `url`，不要改写 URL。
 - **结果没有发布时间就丢弃**，不要拿旧新闻填数。
 - URL 必须是 `https://` 开头且含路径的完整地址，拿不到就**丢弃该条**。
-- 拒绝聚合器/跳转链：`news.google.com`、`t.co`、`l.facebook.com`、`link.zhihu.com` 这类一律丢弃。
+- 拒绝跳转链：`news.google.com`、`t.co`、`l.facebook.com`、`link.zhihu.com` 这类一律丢弃。
 - 说明 ≤ 25 个汉字（英文专有名词不计），只写一个事实，不写"值得关注"这类评价。
+- 不足 3 条就列实际条数，**不要用低信号来源凑数**。
 
 输出（24 小时内一条都没有就写 `<p class="empty">过去 24 小时无更新</p>`）：
 
@@ -174,7 +199,7 @@ curl -s 'https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=15' \
 页面按日期分组，每组一个 `### Thursday, 26th November 2026` 这样的标题，条目后面跟 `[6:08 am]` 这样的时间：
 
 - **从最上面那一组开始取**，不要跳过第一组从第二组取。
-- 每条必须带时间，写成 `MM-DD HH:mm`（24 小时制）。
+- 每条必须带时间，写成 `MM-DD HH:mm`（24 小时制）。页面上的 `[6:08 am]` 是 **UTC**（Atom feed 里 `2026-11-26T06:08:25+00:00` 可核对），要 **加 8 小时**换算成本地时间（`14:08`），跨天要改日期。
 - 超过 24 小时的跳过；不足 3 篇就列实际篇数，**不要用昨天的凑数**。
 - 摘要 ≤ 25 个汉字，只写事实，不写评价。
 
