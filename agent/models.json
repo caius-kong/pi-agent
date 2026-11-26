@@ -6,59 +6,6 @@
       "api": "openai-completions",
       "models": [
         {
-          "id": "qwen3.8-27b-gmi-ray",
-          "name": "qwen3.8-27b-gmi-ray",
-          "api": "openai-completions",
-          "reasoning": true,
-          "thinkingLevelMap": {
-            "off": "none",
-            "low": "low",
-            "medium": "medium",
-            "xhigh": "xhigh",
-            "high": null,
-            "max": null
-          },
-          "input": [
-            "text",
-            "image"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 131072,
-          "maxTokens": 65536,
-          "compat": {
-            "supportsStore": false,
-            "supportsReasoningEffort": true,
-            "thinkingFormat": "qwen"
-          }
-        },
-        {
-          "id": "gemma-4-31b-it-gmi-ray",
-          "name": "gemma-4-31b-it-gmi-ray",
-          "api": "openai-completions",
-          "reasoning": false,
-          "input": [
-            "text",
-            "image"
-          ],
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          },
-          "contextWindow": 262144,
-          "maxTokens": 131072,
-          "compat": {
-            "supportsStore": false,
-            "supportsReasoningEffort": false
-          }
-        },
-        {
           "id": "claude-haiku-4-5",
           "name": "claude-haiku-4-5",
           "api": "openai-completions",
