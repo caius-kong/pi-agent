@@ -6,7 +6,8 @@
 
 ## cron jobs 设计约束：cron → pi agent(prompts/xx.md)
 
-本机定时任务只有一种形态：**一行 crontab → `pi` 读 `prompts/<job>.md` → 模型自己产出文件**。没有 shell 脚本层，没有中间拼装。
+本仓库 `jobs/` 下的定时任务只有一种形态：**一行 crontab → `pi` 读 `prompts/<job>.md` → 模型自己产出文件**。没有 shell 脚本层，没有中间拼装。
+其他工具（teams-channel-pipeline、cloudtrans）会自己往 crontab 装带 `.sh` 的条目；那些脚本不需要套用第一行，但下表中的 `PATH`、`--no-session`、日志三条同样适用。
 
 | 约束 | 原因 |
 |---|---|
@@ -16,6 +17,7 @@
 | 不加 `--no-session` | 没有 session 记录，ccusage 统计不到这次运行的费用 |
 | 扩展靠 `settings.json` 的 `packages` 默认加载 | 不在 crontab 里写 `-e <路径>`，那是重复配置 |
 | `PATH` 写进 crontab 顶部，且必须是**短列表** | cron 不继承登录 shell 的 `PATH`；crontab 单行过长会被**静默丢弃**，整条 `PATH=` 失效 |
+| 任务脚本不要自己补 `PATH` | crontab 是唯一的 `PATH` 来源；脚本里再改会出现两种行为（有的靠 crontab、有的靠自补），排查时分不清 |
 | 其余环境变量放 `jobs/cron.env`（600，不入库） | cron 读不到登录钥匙串这类交互态资源 |
 | 日志重定向到 `jobs/logs/cron.log` | cron 自身没有输出通道 |
 
