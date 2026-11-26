@@ -1,5 +1,6 @@
 # jobs/ 运行时产物：每日晨报（含邮件主题/发件人）、日志、一次性备份
-jobs/logs/
+jobs/logs/*
+!jobs/logs/.gitkeep
 jobs/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].html
 jobs/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md
 jobs/crontab.backup-*

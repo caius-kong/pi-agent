@@ -31,19 +31,21 @@ printf 'export GOG_KEYRING_BACKEND=file\nexport GOG_KEYRING_PASSWORD=%s\n' "$(op
 ### 安装
 
 整条流水线就是一行 crontab，没有脚本：`pi` 读 prompt，子代理并行取数，模型自己把整份 HTML 写到当天文件并打开。
+`pi-subagents` / `pi-web-access` 在 `settings.json` 的 `packages` 里，默认就加载，不需要 `-e`；crontab 顶部已有 `PATH=`，cwd 本来就是 `$HOME`，也不需要重复。
 
 ```bash
 # 装（必须在真实 Terminal 执行；沙箱化 agent 里会因 TCC 授权永久挂起）
-crontab -l 2>/dev/null | grep -v 'jobs/prompts/morning-brief.md' > /tmp/ct; printf '0 9 * * 1-5 cd $HOME && export PATH=/opt/homebrew/bin:/usr/bin:/bin && mkdir -p $HOME/.pi/agent/jobs/logs && . $HOME/.pi/agent/jobs/gog.env && pi --print --no-session -ne -e $HOME/.pi/agent/npm/node_modules/pi-subagents -e $HOME/.pi/agent/npm/node_modules/pi-web-access --tools "subagent,bash" -- "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)" >> $HOME/.pi/agent/jobs/logs/cron.log 2>&1\n' >> /tmp/ct && crontab /tmp/ct && crontab -l | tail -1
+crontab -l 2>/dev/null | grep -v 'jobs/prompts/morning-brief.md' > /tmp/ct; printf '0 9 * * 1-5 . $HOME/.pi/agent/jobs/gog.env && pi -p --no-session "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)" >> $HOME/.pi/agent/jobs/logs/cron.log 2>&1\n' >> /tmp/ct && crontab /tmp/ct && crontab -l | tail -1
 
 # 验收：手动跑同一条命令（空环境 = cron 环境），stdout 只应有一行「晨报已生成：<路径>」
-env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/bin:/bin sh -c 'cd $HOME && . .pi/agent/jobs/gog.env && pi --print --no-session -ne -e $HOME/.pi/agent/npm/node_modules/pi-subagents -e $HOME/.pi/agent/npm/node_modules/pi-web-access --tools "subagent,bash" -- "$(cat .pi/agent/jobs/prompts/morning-brief.md)"'
+env -i HOME="$HOME" PATH=/opt/homebrew/bin:/usr/bin:/bin sh -c '. $HOME/.pi/agent/jobs/gog.env && pi -p --no-session "$(cat $HOME/.pi/agent/jobs/prompts/morning-brief.md)"'
 f=~/.pi/agent/jobs/$(date +%F).html
 head -c 15 "$f"; echo            # <!doctype html>
-grep -c '<h2' "$f"               # 8
+grep -c '<h2' "$f"               # 6（EMAILS 下的三个子块是 h3）
 grep -c 'class="error"' "$f"     # 0
 grep -c '_今日' "$f"              # 0（空态必须是 <p class="empty">，不能漏 Markdown 下划线）
+grep -cE 'KEYS|需要回复|重要通知|其余未读|AI 热点|Hacker News|GitHub Trending|Simon Willison' "$f"   # 8 个板块都在
 ```
 
-cron 不加载 shell 配置，所以那一行自己 `export PATH` 并 `. gog.env`。
+cron 不加载 shell 配置，所以那一行自己 `. gog.env`（gog 的 file keyring 需要这两个变量）。
 单次运行实测 100–600 秒（子代理冷启动 + 网关排队），cron 不做超时。
