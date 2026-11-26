@@ -28,8 +28,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { pathToFileURL } from "node:url";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveDep } from "./resolve-dep.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -59,7 +58,7 @@ ensureDeps();
 const PI = resolveDep("@earendil-works+pi-coding-agent@", "@earendil-works/pi-coding-agent");
 // The real projection function, not a copy: this is the code whose behavior the
 // invariant depends on, so it is the code the test reads.
-const { buildContextEntries } = await import(
+const { buildContextEntries, sessionEntryToContextMessages } = await import(
   pathToFileURL(path.join(PI, "dist", "core", "session-manager.js")).href
 );
 const { default: agentGoal } = await import(path.join(EXTENSIONS, "agent-goal", "index.ts"));
@@ -100,13 +99,17 @@ function summarizedAway(stateEntry) {
   ]);
 }
 
-/** A session manager that can answer both ways, like the real one. */
+/**
+ * A session manager that answers both ways, like the real one: the raw branch and
+ * the compaction-filtered view. Both are built with pi's own functions, so a
+ * reader that switches to the filtered view fails for the right reason.
+ */
 function sessionManager(branch) {
   const projection = buildContextEntries(branch);
   return {
     getBranch: () => branch,
     buildContextEntries: () => projection,
-    buildSessionContext: () => ({ messages: projection.flatMap((entry) => entry.message ? [entry.message] : []) }),
+    buildSessionContext: () => ({ messages: projection.flatMap(sessionEntryToContextMessages) }),
   };
 }
 
@@ -116,11 +119,18 @@ test("compaction hides summarized entries from the model but keeps them in the b
   const branch = summarizedAway({ type: "custom", customType: "agent-goal-state", data: { goal: "ship the audit" } });
   const projection = buildContextEntries(branch);
   const ids = (list) => list.map((entry) => entry.id);
+  const has = (list, id) => list.some((entry) => entry.id === id);
 
   assert.deepEqual(ids(branch), ["1", "2", "3", "4", "5", "6"], "getBranch() is the raw, append-only path");
-  assert.deepEqual(ids(projection), ["5", "4", "6"], "the projection is the compaction entry, then kept entries");
+  assert.ok(has(projection, "5"), "the projection carries the compaction entry itself");
+  for (const summarized of ["1", "2", "3"]) {
+    assert.equal(has(projection, summarized), false, `summarized entry ${summarized} is gone from the model-visible context`);
+  }
   assert.equal(projection.some((entry) => entry.customType === "agent-goal-state"), false,
     "the state entry is genuinely gone from the model-visible context");
+  for (const kept of ["4", "6"]) {
+    assert.equal(has(projection, kept), true, `entry ${kept} is still in the model-visible context`);
+  }
   assert.equal(projection.some((entry) => entry.customType === "auto-compact-continuation"), true,
     "an entry committed after the compaction entry stays in the model-visible context");
 });
