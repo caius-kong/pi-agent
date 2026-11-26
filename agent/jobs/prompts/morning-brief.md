@@ -14,6 +14,15 @@ $HOME/.pi/agent/jobs/$(date +%F).html
 - 写完用 `open -a "Google Chrome" "<刚写的那个路径>"` 打开它。
 - stdout 只输出一行 `晨报已生成：<路径>`，不要复述内容。
 
+## 时间窗口（资讯章节通用）
+
+`AI 热点`、`Hacker News`、`Simon Willison` 三节只收**最近 24 小时**内发布的条目，窗口从运行时刻往回推 24 小时，不是「今天 0 点」。`GitHub Trending` 不适用（榜单本身即今日口径），`KEYS`、`EMAILS` 各有自己的规则。
+
+- 每条都带发布时间 `MM-DD HH:mm`，紧跟在标题后面。
+- 拿不到发布时间 → 丢弃该条，不要猜、不要按返回顺序推。
+- 24 小时内不足 3 条 → 列实际条数，**不要用旧条目凑数**。
+- 一条都没有 → 该节写 `<p class="empty">过去 24 小时无更新</p>`。
+
 ## KEYS
 
 1. 先取日期和凭据，跑这两条命令：
@@ -99,47 +108,56 @@ gog gmail archive --query 'is:unread category:promotions newer_than:1d' --max 50
 
 ## 【AI NEWS】
 
-用 `web_search` 取今天的 AI 热点。工具调用 ≤ 4 次。**禁止使用训练数据、历史缓存或自行编造。**
+用 `web_search` 取 AI 热点，`recencyFilter` 设为 `day`。工具调用 ≤ 4 次。**禁止使用训练数据、历史缓存或自行编造。**
 
-查询 `AI news today`，必要时补一条 `LLM release this week`。从结果里挑 **3 条**本周内的：
+查询 `AI news today`，必要时补一条 `LLM release today`。只取**最近 24 小时**内发布的，按发布时间从新到旧挑 3 条：
 
 - 每条用结果自带的 `title` 和 `url`，不要改写 URL。
-- 结果里都没有日期就按返回顺序取前 3 条，不要声称"今天"。
+- **结果没有发布时间就丢弃**，不要拿旧新闻填数。
 - URL 必须是 `https://` 开头且含路径的完整地址，拿不到就**丢弃该条**。
-- 拒绝聚合器/跳转链：`news.google.com`、`t.co`、`l.facebook.com`、`link.zhihu.com` 这类一律丢弃，宁可这节少几条。
+- 拒绝聚合器/跳转链：`news.google.com`、`t.co`、`l.facebook.com`、`link.zhihu.com` 这类一律丢弃。
 - 说明 ≤ 25 个汉字（英文专有名词不计），只写一个事实，不写"值得关注"这类评价。
 
-输出（拿不到就写 `<p class="empty">今日未取到数据</p>`）：
+输出（24 小时内一条都没有就写 `<p class="empty">过去 24 小时无更新</p>`）：
 
 ```markdown
 ## 🤖 AI 热点
 
-- [标题](https://example.com/path) — 一句说明
+- [标题](https://example.com/path) — 11-26 06:08 · 一句说明
 ```
 
 ## 【HN】
 
-用 `fetch_content` 抓 `https://news.ycombinator.com/`，取首页**前 3 条故事**：
+取 Hacker News 首页，走 JSON 接口（首页 HTML 直连在这台机器上经常超时）：
 
-- 跳过 `Jobs` 那一行（招聘广告）。
-- 标题链接是外站 URL，取完整路径；不要用 `item?id=…` 的评论页链接，不要只写域名。
+```bash
+curl -s 'https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=15' \
+  | /usr/bin/python3 -c "import json,sys;[print(h['created_at'],h.get('points'),h.get('title'),h.get('url') or '') for h in json.load(sys.stdin)['hits']]"
+```
+
+`created_at` 是 UTC，换算成本地时间（UTC+8）再判断。取**最近 24 小时**内排名最靠前的 3 条：
+
+- 超过 24 小时的跳过，往下取。
+- 链接用接口给的 `url` 完整地址；`url` 为空的（Ask HN 这类）跳过。
+- 不要用 `item?id=…` 的评论页链接，不要只写域名。
 - 说明 ≤ 25 个汉字，只写事实，不写评价。
 
-抓取失败 → 补一次 `web_search` 查 `hacker news today`；还拿不到就写 `<p class="empty">今日未取到数据</p>`。
+命令失败 → 补一次 `web_search` 查 `hacker news today`（同样只取带发布时间的）；还拿不到就写 `<p class="empty">过去 24 小时无更新</p>`。
 
 ```markdown
 ## 💻 Hacker News
 
-- [标题](https://example.com/path) — 一句说明
+- [标题](https://example.com/path) — 11-26 01:18 · 一句说明
 ```
 
 ## 【GH】
 
-用 `fetch_content` 抓 `https://github.com/trending`，取 **3 个**仓库：
+用 `fetch_content` 抓 `https://github.com/trending?since=daily`（**必须带 `since=daily`**：默认榜单混了周/月口径，会掺进几天前的项目），取 **3 个**仓库：
 
 - 跳过标了 `Sponsored` 的条目。
 - 链接统一写成 `https://github.com/<owner>/<repo>`，从页面里取真实 owner/repo，不要编。
 - 说明 ≤ 25 个汉字，只写事实，不写评价。
+- **本节不标发布时间**：榜单本身就是今日 star 增量，页面不提供单条发布时间，不要自己编一个。
 
 抓取失败 → 补一次 `web_search` 查 `github trending today`；还拿不到就写 `<p class="empty">今日未取到数据</p>`。
 
@@ -151,14 +169,19 @@ gog gmail archive --query 'is:unread category:promotions newer_than:1d' --max 50
 
 ## 【SW】
 
-用 `fetch_content` 抓 `https://simonwillison.net/`，取最新 **3 篇**文章。
+用 `fetch_content` 抓 `https://simonwillison.net/`，取**最近 24 小时**内发布的文章，从新到旧最多 3 篇。
 
+页面按日期分组，每组一个 `### Thursday, 26th November 2026` 这样的标题，条目后面跟 `[6:08 am]` 这样的时间：
+
+- **从最上面那一组开始取**，不要跳过第一组从第二组取。
+- 每条必须带时间，写成 `MM-DD HH:mm`（24 小时制）。
+- 超过 24 小时的跳过；不足 3 篇就列实际篇数，**不要用昨天的凑数**。
 - 摘要 ≤ 25 个汉字，只写事实，不写评价。
 
-抓取失败 → 补一次 `web_search` 查 `simon willison latest`；还拿不到就写 `<p class="empty">今日未取到数据</p>`。
+抓取失败 → 补一次 `web_search` 查 `simon willison latest`（同样只取带发布时间的）；还拿不到就写 `<p class="empty">过去 24 小时无更新</p>`。
 
 ```markdown
 ## 📝 Simon Willison
 
-- [标题](https://example.com/path) — 一句摘要
+- [标题](https://example.com/path) — 11-26 06:08 · 一句摘要
 ```
