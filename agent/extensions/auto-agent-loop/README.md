@@ -157,7 +157,7 @@ auto-agent-loop: ended · Probability(continue)=0.11 ≤ 0.20 · loop 0/3
 {
   "auto-agent-loop": {
     "enable": true,
-    "flash-model": "trendmicro/deepseek-v4-flash-0731-gmi-ray",
+    "flash-model": "trendmicro/deepseek-v4-flash-0731",
     "jev-model": "trendmicro/jev-1.13",
     "max-loop": 3,
     "timeout-ms": 300000,

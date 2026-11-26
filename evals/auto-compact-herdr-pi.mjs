@@ -11,7 +11,7 @@ const temp = await mkdtemp(path.join(os.tmpdir(), "pi-auto-compact-herdr-"));
 const project = path.join(temp, "project");
 const extensions = path.join(temp, "extensions");
 const sessions = path.join(temp, "sessions");
-const model = "trendmicro/qwen3.8-27b-gmi-ray";
+const model = "trendmicro/qwen3.8-27b";
 const timeoutMs = 5 * 60 * 1000;
 
 async function collectFiles(directory) {
@@ -82,7 +82,7 @@ try {
   const stageTwo = `The stage 1 result is TARGET-CODE: MAPLE-82. Stage 2 remains: append -VERIFIED to that exact code and reply only with the transformed code. This is the safe checkpoint: stage 1 ended as a distinct completed assistant answer; no tools are running, no delegated work exists, and no decision is pending. Call request_compaction as the only tool now, then continue.`;
   const second = "Stage 1 is complete: the exact code is known. Stage 2 remains: append -VERIFIED to the exact TARGET-CODE and return only the transformed code. This is a safe checkpoint: stage 1 is a coherent work unit, nothing is pending, and stage 2 remains. Call request_compaction as the only tool now, then continue.";
   const models = JSON.parse(await readFile(path.join(repo, "agent/models.json"), "utf8"));
-  const configuredModel = models.providers.trendmicro.models.find(entry => entry.id === "qwen3.8-27b-gmi-ray");
+  const configuredModel = models.providers.trendmicro.models.find(entry => entry.id === "qwen3.8-27b");
   assert.ok(configuredModel?.contextWindow, "acceptance model must declare its context window");
   const inputChars = records.reduce((sum, record) => sum + record.body.length, 0);
   assert.ok(inputChars > configuredModel.contextWindow * 0.05 * 4, "input material must exceed the temporary 5% threshold estimate");

@@ -13,7 +13,7 @@ const REQUEST_TIMEOUT_MARGIN_MS = 15_000;
 const PROVIDER_RETRIES = 2;
 
 export const DEFAULT_CONFIG = Object.freeze({
-  flash: Object.freeze({ provider: "trendmicro", model: "deepseek-v4-flash-0731-gmi-ray" }),
+  flash: Object.freeze({ provider: "trendmicro", model: "deepseek-v4-flash-0731" }),
   jev: Object.freeze({ provider: "trendmicro", model: "jev-1.13" }),
   maxContinuations: 3,
   timeoutMs: TIMEOUT_MS,

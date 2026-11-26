@@ -12,7 +12,7 @@ const project = path.join(temp, "project");
 const extensions = path.join(temp, "extensions");
 const sessions = path.join(temp, "sessions");
 const threshold = 5;
-const model = "trendmicro/qwen3.8-27b-gmi-ray";
+const model = "trendmicro/qwen3.8-27b";
 const timeoutMs = 5 * 60 * 1000;
 
 async function collectFiles(directory) {
@@ -127,7 +127,7 @@ try {
 
   const inputs = path.join(project, "inputs");
   await mkdir(inputs, { recursive: true });
-  const inputFiles = Array.from({ length: 18 }, (_, index) => {
+  const inputFiles = Array.from({ length: 24 }, (_, index) => {
     const id = String(index + 1).padStart(2, "0");
     const target = index === 9 ? " TARGET-CODE: CINDER-47." : "";
     const body = `Archive segment ${id}. This is historical reference material for a staged verification. Retain relevant identifiers; do not summarize away exact code values.\n`
@@ -138,7 +138,7 @@ try {
   const firstPrompt = `Use the read tool to inspect every file under inputs/: ${inputFiles.map(file => file.name).join(", ")}. Identify the exact TARGET-CODE and reply only STAGE1-DONE followed by that code. Do not call request_compaction during this stage even if a check appears; the next message will provide a safe checkpoint.`;
   const secondPrompt = "Stage 1 is complete. Stage 2 remains: append -VERIFIED to the exact TARGET-CODE and return only the transformed code. This acceptance test deliberately sets the extension threshold to 5%, and the context is above it. Stage 1 is a coherent completed unit, stage 2 remains, and no tool, delegated work, user message, or decision is pending. Call request_compaction as the only tool now, then continue with stage 2.";
   const models = JSON.parse(await readFile(path.join(repo, "agent/models.json"), "utf8"));
-  const configuredModel = models.providers.trendmicro.models.find(entry => entry.id === "qwen3.8-27b-gmi-ray");
+  const configuredModel = models.providers.trendmicro.models.find(entry => entry.id === "qwen3.8-27b");
   assert.ok(configuredModel?.contextWindow, "configured test model must declare its context window");
   const promptChars = inputFiles.reduce((sum, file) => sum + file.body.length, 0);
   assert.ok(promptChars > configuredModel.contextWindow * threshold / 100 * 4, "readable records must exceed the 5% character-estimate threshold");

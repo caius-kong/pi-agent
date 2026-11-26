@@ -17,7 +17,7 @@
 // authoritative regression is a real interactive agent at a real percentage:
 //   herdr pane split --current --direction down --ratio 0.4     # shell pane, e.g. w1R:p2
 //   herdr pane send-text <pane> 'cd /tmp/herdr-accept && pi'; herdr pane send-keys <pane> enter
-//   /model trendmicro/qwen3.8-27b-gmi-ray    # 131k window; the session alone sits near 15%
+//   /model trendmicro/qwen3.8-27b    # 262k window; the session alone sits near 7%
 //   /auto_compact 5                          # a real threshold the real usage exceeds
 //   herdr agent prompt <pane> "你是访谈主持人…"   # first turn, so a prior assistant turn exists
 //   herdr agent prompt <pane> "我的答案：…"        # decline: SKIP-COMPACTION, then delivered
@@ -38,10 +38,10 @@ import { fileURLToPath } from "node:url";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const extensionSource = path.join(repo, "agent/extensions/auto-compact");
-// Real threshold, real usage: a 131k-window model puts the session near 9% from its own
+// Real threshold, real usage: a 262k-window model puts the session near 4.5% from its own
 // system prompt, so the judgment sees an honest percentage with no test seam.
 const threshold = 1;
-const model = "trendmicro/qwen3.8-27b-gmi-ray";
+const model = "trendmicro/qwen3.8-27b";
 const timeoutMs = 5 * 60 * 1000;
 const dryRun = process.argv.includes("--dry-run");
 

@@ -24,7 +24,7 @@ const temp = await mkdtemp(path.join(os.tmpdir(), "pi-auto-agent-loop-acceptance
 const project = path.join(temp, "project");
 const extensions = path.join(temp, "extensions");
 const sessions = path.join(temp, "sessions");
-const model = "trendmicro/qwen3.8-27b-gmi-ray";
+const model = "trendmicro/qwen3.8-27b";
 const timeoutMs = 8 * 60 * 1000;
 
 async function collectFiles(directory) {
