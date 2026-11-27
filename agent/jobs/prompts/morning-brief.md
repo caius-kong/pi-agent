@@ -38,8 +38,8 @@ date +%F
 <table>
   <thead><tr><th>KEY</th><th>EXP</th><th>Locations</th></tr></thead>
   <tbody>
-    <tr><td>RDSEC / trendmicro-aiendpoint JWT</td><td>2027-02-21 · 剩 88 天</td>
-        <td>nj-xxxx - ~/.pi/agent/auth.json - trendmicro.key<br>trendmac2 - ~/.config/hindsight-podman/.env - HINDSIGHT_API_LLM_API_KEY</td></tr>
+    <tr><td>PROVIDER / model JWT</td><td>YYYY-MM-DD · 剩 N 天</td>
+        <td>&lt;host-a&gt; - &lt;credential-file&gt; - &lt;key-name&gt;<br>&lt;host-b&gt; - &lt;env-file&gt; - &lt;ENV_VAR&gt;</td></tr>
   </tbody>
 </table>
 ```
